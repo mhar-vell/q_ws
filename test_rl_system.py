@@ -50,7 +50,7 @@ def test_rl_system():
     q_agent.update(test_state, action, 1.0, test_state, False)
     print(f"✅ Q-Learning update test passed")
     
-    if TORCH_AVAILABLE:
+    if PYTORCH_AVAILABLE:
         print("\n3. Testing DQN Agent...")
         
         dqn_agent = DQNAgent(state_dim, action_dim)

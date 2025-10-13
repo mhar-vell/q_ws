@@ -20,10 +20,15 @@ try:
     import torch.nn as nn
     import torch.optim as optim
     import torch.nn.functional as F
-    TORCH_AVAILABLE = True
+    PYTORCH_AVAILABLE = True
+    print("PyTorch available. Using Deep Q-Network (DQN).")
 except ImportError:
+    PYTORCH_AVAILABLE = False
+    torch = None
+    nn = None
+    optim = None
+    F = None
     print("PyTorch not available. Using tabular Q-learning.")
-    TORCH_AVAILABLE = False
 
 class TrajectoryEnvironment:
     """
@@ -659,7 +664,7 @@ class DQNAgent:
                  discount_factor=0.95, epsilon=1.0, epsilon_decay=0.995,
                  epsilon_min=0.01, memory_size=10000, batch_size=32):
         """Initialize DQN agent."""
-        if not TORCH_AVAILABLE:
+        if not PYTORCH_AVAILABLE:
             raise ImportError("PyTorch required for DQN agent")
         
         self.state_dim = state_dim
@@ -771,29 +776,39 @@ class DQNAgent:
             print(f"Model file {filepath} not found. Starting with random weights.")
 
 
-class DQNNetwork(nn.Module):
-    """Neural network for Deep Q-Learning."""
-    
-    def __init__(self, state_dim, action_dim, hidden_dims=[256, 256]):
-        super(DQNNetwork, self).__init__()
+# Define DQN Network only if PyTorch is available
+if PYTORCH_AVAILABLE:
+    class DQNNetwork(nn.Module):
+        """Neural network for Deep Q-Learning."""
         
-        layers = []
-        input_dim = state_dim
+        def __init__(self, state_dim, action_dim, hidden_dims=[256, 256]):
+            super(DQNNetwork, self).__init__()
+            
+            layers = []
+            input_dim = state_dim
+            
+            for hidden_dim in hidden_dims:
+                layers.extend([
+                    nn.Linear(input_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Dropout(0.2)
+                ])
+                input_dim = hidden_dim
+            
+            layers.append(nn.Linear(input_dim, action_dim))
+            
+            self.network = nn.Sequential(*layers)
         
-        for hidden_dim in hidden_dims:
-            layers.extend([
-                nn.Linear(input_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(0.2)
-            ])
-            input_dim = hidden_dim
-        
-        layers.append(nn.Linear(input_dim, action_dim))
-        
-        self.network = nn.Sequential(*layers)
-    
-    def forward(self, x):
-        return self.network(x)
+        def forward(self, x):
+            return self.network(x)
+else:
+    # Placeholder when PyTorch not available
+    class DQNNetwork:
+        def __init__(self, *args, **kwargs):
+            print("DQN not available - PyTorch required")
+            
+        def forward(self, x):
+            return None
 
 
 class TrajectoryPlanner:
@@ -812,7 +827,7 @@ class TrajectoryPlanner:
         """
         self.robot_id = robot_id
         self.manipulator_id = manipulator_id
-        self.use_dqn = use_dqn and TORCH_AVAILABLE
+        self.use_dqn = use_dqn and PYTORCH_AVAILABLE
         
         # Create sample trajectory (figure-8 pattern)
         self.target_trajectory = self._generate_sample_trajectory()
@@ -844,23 +859,77 @@ class TrajectoryPlanner:
         print(f"  Trajectory waypoints: {len(self.target_trajectory)}")
     
     def _generate_sample_trajectory(self):
-        """Generate a sample trajectory for testing."""
-        # Figure-8 pattern above the robot
-        trajectory = []
-        num_points = 20
+        """
+        Generate a sample trajectory for testing.
         
-        for i in range(num_points):
-            t = 2 * np.pi * i / num_points
+        You can change the trajectory type here:
+        - 'figure8': Figure-8 pattern (default)
+        - 'circle': Circular path
+        - 'square': Square path
+        - 'helix': Spiral upward/downward
+        - 'line': Straight line
+        - 'sine': Sine wave
+        - 'star': Star pattern
+        - 'pick_place': Pick and place task
+        """
+        try:
+            from trajectory_generators import TrajectoryGenerator
+            traj_gen = TrajectoryGenerator(base_height=0.8, base_center=(0.0, 0.0))
             
-            # Figure-8 parametric equations
-            x = 0.3 * np.sin(t)
-            y = 0.2 * np.sin(2 * t)
-            z = 0.8  # Fixed height
+            # ============================================================
+            # CHOOSE YOUR TRAJECTORY HERE:
+            # ============================================================
             
-            # Simple orientation (pointing down)
-            rx, ry, rz = 0, 0, 0
+            # Option 1: Figure-8 (default)
+            trajectory = traj_gen.generate_figure8(num_points=20, scale_x=0.3, scale_y=0.2)
             
-            trajectory.append([x, y, z, rx, ry, rz])
+            # Option 2: Circle
+            # trajectory = traj_gen.generate_circle(num_points=20, radius=0.3, orientation='horizontal')
+            
+            # Option 3: Square
+            # trajectory = traj_gen.generate_square(num_points=20, side_length=0.4)
+            
+            # Option 4: Helix (spiral)
+            # trajectory = traj_gen.generate_helix(num_points=30, radius=0.25, height_range=0.4, turns=2)
+            
+            # Option 5: Straight line
+            # trajectory = traj_gen.generate_line(start_point=(0.2, 0.0, 0.6), 
+            #                                      end_point=(0.5, 0.3, 1.0), 
+            #                                      num_points=15)
+            
+            # Option 6: Sine wave
+            # trajectory = traj_gen.generate_sine_wave(num_points=20, amplitude=0.15, wavelength=0.6, axis='x')
+            
+            # Option 7: Star
+            # trajectory = traj_gen.generate_star(num_points=25, outer_radius=0.3, inner_radius=0.15, num_tips=5)
+            
+            # Option 8: Pick and place
+            # trajectory = traj_gen.generate_pick_and_place(pick_pos=(0.4, 0.2, 0.5),
+            #                                                place_pos=(0.4, -0.2, 0.5),
+            #                                                approach_height=0.15)
+            
+            # Option 9: Custom waypoints
+            # custom_waypoints = [
+            #     (0.3, 0.0, 0.7),
+            #     (0.4, 0.1, 0.8),
+            #     (0.3, 0.2, 0.9),
+            #     (0.2, 0.1, 0.8),
+            # ]
+            # trajectory = traj_gen.generate_custom(custom_waypoints)
+            
+        except ImportError:
+            # Fallback: original figure-8 implementation
+            print("⚠️  trajectory_generators not found, using default figure-8")
+            trajectory = []
+            num_points = 20
+            
+            for i in range(num_points):
+                t = 2 * np.pi * i / num_points
+                x = 0.3 * np.sin(t)
+                y = 0.2 * np.sin(2 * t)
+                z = 0.8
+                rx, ry, rz = 0, 0, 0
+                trajectory.append([x, y, z, rx, ry, rz])
         
         return trajectory
     

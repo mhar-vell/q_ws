@@ -1,4 +1,5 @@
 import pybullet as p
+p.connect(p.GUI)
 import time
 import math
 from datetime import datetime
@@ -6,6 +7,8 @@ import pybullet_data
 import numpy as np
 import random
 import os
+from rl_mission_env import MobileManipulatorEnv, QLearningAgent
+import json
 
 # Import RL Trajectory Planner
 try:
@@ -66,20 +69,24 @@ class VirtualIMU:
         
     def get_link_state(self):
         """Get current link state (position, orientation, velocities)."""
-        if self.link_index == -1:
-            # Base link
-            pos, orn = p.getBasePositionAndOrientation(self.robot_id)
-            lin_vel, ang_vel = p.getBaseVelocity(self.robot_id)
-            return pos, orn, lin_vel, ang_vel
-        else:
-            # Specific link
-            link_state = p.getLinkState(self.robot_id, self.link_index, 
-                                      computeLinkVelocity=1)
-            pos = link_state[0]  # World position
-            orn = link_state[1]  # World orientation  
-            lin_vel = link_state[6]  # Linear velocity
-            ang_vel = link_state[7]  # Angular velocity
-            return pos, orn, lin_vel, ang_vel
+        try:
+            if self.link_index == -1:
+                # Base link
+                pos, orn = p.getBasePositionAndOrientation(self.robot_id)
+                lin_vel, ang_vel = p.getBaseVelocity(self.robot_id)
+                return pos, orn, lin_vel, ang_vel
+            else:
+                # Specific link
+                link_state = p.getLinkState(self.robot_id, self.link_index, 
+                                          computeLinkVelocity=1)
+                pos = link_state[0]  # World position
+                orn = link_state[1]  # World orientation  
+                lin_vel = link_state[6]  # Linear velocity
+                ang_vel = link_state[7]  # Angular velocity
+                return pos, orn, lin_vel, ang_vel
+        except Exception as e:
+            # Return safe defaults if robot is not available
+            return ([0, 0, 0], [0, 0, 0, 1], [0, 0, 0], [0, 0, 0])
     
     def world_to_body_frame(self, vector, orientation):
         """Transform vector from world frame to body frame using quaternion."""
@@ -399,16 +406,9 @@ class VideoRecorder:
             
         print(f"📷 Camera updated: distance={self.camera_distance}, yaw={self.camera_yaw}°, pitch={self.camera_pitch}°")
 
-clid = p.connect(p.SHARED_MEMORY)
-
-
-if (clid < 0):
-  p.connect(p.GUI)
-
+# Set up PyBullet physics and search paths
 p.setPhysicsEngineParameter(enableConeFriction=0)
-
 p.setAdditionalSearchPath(pybullet_data.getDataPath())
-
 
 p.loadURDF("plane.urdf", [0, 0, -0.3])
 husky = p.loadURDF("husky/husky.urdf", [0.290388, 0.329902, -0.310270],
@@ -461,6 +461,83 @@ if RL_AVAILABLE:
         print(f"❌ Failed to initialize RL planner: {e}")
         RL_AVAILABLE = False
 
+
+# === RL ENVIRONMENT AND AGENT INITIALIZATION ===
+# After Husky and KUKA are loaded:
+rl_goal_pose = np.array([1.0, 0.0, 0.5, 0.0])  # Example goal pose (x, y, z, orientation)
+rl_env = MobileManipulatorEnv(pybullet_client=p, husky_id=husky, kuka_id=kukaId, goal_pose=rl_goal_pose)
+
+# === CHOOSE RL ALGORITHM ===
+# Option 1: Tabular Q-Learning (simple, interpretable, works for discrete states)
+# Option 2: Deep Q-Network (DQN) (powerful, scales to continuous states, requires PyTorch)
+USE_DQN = True  # Set to False to use tabular Q-Learning instead
+
+if USE_DQN:
+    try:
+        from rl_mission_env import DQNAgent
+        rl_agent = DQNAgent(state_dim=rl_env.state_dim, action_dim=rl_env.action_dim, alpha=0.001)
+        print(f"✅ Using Deep Q-Network (DQN) agent")
+    except Exception as e:
+        print(f"⚠️  DQN not available ({e}), falling back to Q-Learning")
+        rl_agent = QLearningAgent(state_dim=rl_env.state_dim, action_dim=rl_env.action_dim)
+else:
+    rl_agent = QLearningAgent(state_dim=rl_env.state_dim, action_dim=rl_env.action_dim)
+    print(f"✅ Using Tabular Q-Learning agent")
+
+# === RL SCENARIOS AND METRICS ===
+rl_scenarios = [
+  'none',
+  'random',
+  'periodic',
+  'continuous',
+  'impulse'
+]
+rl_metrics = {scenario: {'success': 0, 'errors': [], 'steps': [], 'energy': [], 'episodes': 0} for scenario in rl_scenarios}
+
+# === RL TRAINING LOOP HOOK ===
+rl_training_enabled = False  # Set to True to enable automatic training on startup
+rl_training_mode = False  # Toggle during simulation with 't' key
+
+# Training Configuration Options (uncomment one):
+# rl_num_episodes = 100      # TESTING: ~10 min total (all scenarios) - For debugging only
+rl_num_episodes = 500      # DEVELOPMENT: ~45 min total - Initial learning visible
+# rl_num_episodes = 2000     # PRODUCTION: ~3 hours total - Good performance (recommended)
+# rl_num_episodes = 5000     # HIGH-PERFORMANCE: ~8 hours total - Near-optimal performance
+
+rl_max_steps = 200         # Max steps per episode before timeout
+rl_episode_counter = 0
+rl_step_counter = 0
+rl_state = None
+rl_current_scenario_idx = 0
+rl_current_episode = 0
+
+# Note: RL training disabled on startup to allow interactive simulation
+# Press 't' during simulation to start RL training mode
+print("\n=== RL Training Configuration ===")
+print(f"RL Algorithm: {rl_agent.agent_type}")
+print(f"Training scenarios: {rl_scenarios}")
+print(f"Episodes per scenario: {rl_num_episodes}")
+print(f"Total episodes (all scenarios): {rl_num_episodes * len(rl_scenarios)}")
+print(f"Max steps per episode: {rl_max_steps}")
+print(f"Estimated training time: ~{(rl_num_episodes * len(rl_scenarios) * 0.5 / 60):.1f} minutes")
+print("\nAlgorithm Comparison:")
+print("  📊 Tabular Q-Learning:")
+print("     • Simple, interpretable, fast updates")
+print("     • Works well for discrete states")
+print("     • Limited scalability to high dimensions")
+print("  🧠 Deep Q-Network (DQN):")
+print("     • Powerful function approximation with neural nets")
+print("     • Handles high-dimensional continuous states")
+print("     • Requires more data, slower to train")
+print("     • Better generalization across states")
+print("\nTraining Recommendations:")
+print("  • 100 episodes  = Quick test (not enough for learning)")
+print("  • 500 episodes  = Development (initial learning)")
+print("  • 2000 episodes = Production (recommended for good performance)")
+print("  • 5000 episodes = High-performance (near-optimal)")
+print("\nPress 't' during simulation to toggle RL training mode")
+print("====================================\n")
+
 baseorn = p.getQuaternionFromEuler([3.1415, 0, 0.3])
 baseorn = [0, 0, 0, 1]
 #[0, 0, 0.707, 0.707]
@@ -507,21 +584,21 @@ ang = 0
 
 
 def accurateCalculateInverseKinematics(kukaId, endEffectorId, targetPos, threshold, maxIter):
-  closeEnough = False
-  iter = 0
-  dist2 = 1e30
-  while (not closeEnough and iter < maxIter):
-    jointPoses = p.calculateInverseKinematics(kukaId, kukaEndEffectorIndex, targetPos)
-    for i in range(numJoints):
-      p.resetJointState(kukaId, i, jointPoses[i])
-    ls = p.getLinkState(kukaId, kukaEndEffectorIndex)
-    newPos = ls[4]
-    diff = [targetPos[0] - newPos[0], targetPos[1] - newPos[1], targetPos[2] - newPos[2]]
-    dist2 = (diff[0] * diff[0] + diff[1] * diff[1] + diff[2] * diff[2])
-    closeEnough = (dist2 < threshold)
-    iter = iter + 1
-  #print ("Num iter: "+str(iter) + "threshold: "+str(dist2))
-  return jointPoses
+    closeEnough = False
+    iter = 0
+    dist2 = 1e30
+    while (not closeEnough and iter < maxIter):
+        jointPoses = p.calculateInverseKinematics(kukaId, endEffectorId, targetPos)
+        for i in range(numJoints):
+            p.resetJointState(kukaId, i, jointPoses[i])
+        ls = p.getLinkState(kukaId, endEffectorId)
+        newPos = ls[4]
+        diff = [targetPos[0] - newPos[0], targetPos[1] - newPos[1], targetPos[2] - newPos[2]]
+        dist2 = (diff[0] * diff[0] + diff[1] * diff[1] + diff[2] * diff[2])
+        closeEnough = (dist2 < threshold)
+        iter = iter + 1
+    #print ("Num iter: "+str(iter) + "threshold: "+str(dist2))
+    return jointPoses
 
 
 wheels = [2, 3, 4, 5]
@@ -858,53 +935,102 @@ while 1:
         for i in range(len(wheels)):
           wheelVelocities[i] = wheelVelocities[i] - speed * wheelDeltasFwd[i]
 
-  # === RL TRAJECTORY PLANNER CONTROL ===
-  if RL_AVAILABLE and rl_planner is not None:
-    if rl_training_mode:
-      # RL Training Mode - Run training episodes
-      try:
-        if not hasattr(rl_planner, '_training_episode'):
-          rl_planner._training_episode = 0
-          rl_planner._training_state = rl_planner.env.reset()
-          rl_planner._episode_start_time = time.time()
-          print(f"🎓 Starting RL training episode {rl_planner._training_episode + 1}")
-        
-        # Execute one training step
-        action = rl_planner.agent.choose_action(rl_planner._training_state)
-        next_state, reward, done, info = rl_planner.env.step(action)
-        
-        # Update agent
-        if hasattr(rl_planner.agent, 'update'):
-          rl_planner.agent.update(rl_planner._training_state, action, reward, next_state, done)
-        
-        rl_planner._training_state = next_state
-        
-        # Episode completed
-        if done:
-          episode_time = time.time() - rl_planner._episode_start_time
-          print(f"✅ Training episode {rl_planner._training_episode + 1} completed in {episode_time:.1f}s")
-          print(f"   Reward: {info.get('total_reward', 0):.1f}, Error: {info.get('ee_error', 0):.4f}m")
-          
-          rl_planner._training_episode += 1
-          
-          # Save model every 50 episodes
-          if rl_planner._training_episode % 50 == 0:
-            rl_planner.save_model(f"husky_kuka_trajectory_planner_ep{rl_planner._training_episode}")
-            print(f"💾 Model saved at episode {rl_planner._training_episode}")
-          
-          # Reset for next episode
-          if rl_planner._training_episode < 1000:  # Max training episodes
-            rl_planner._training_state = rl_planner.env.reset()
-            rl_planner._episode_start_time = time.time()
-          else:
-            rl_training_mode = False
-            print("🎓 Training completed! 1000 episodes finished.")
-            
-      except Exception as e:
-        print(f"❌ RL Training error: {e}")
-        rl_training_mode = False
+  # === RL TRAINING IN MAIN LOOP ===
+  # Run RL training step-by-step within the simulation
+  if rl_training_mode and rl_current_scenario_idx < len(rl_scenarios):
+    scenario = rl_scenarios[rl_current_scenario_idx]
     
-    elif rl_execution_mode:
+    # Initialize episode if needed
+    if rl_step_counter == 0:
+      rl_state = rl_env.reset()
+      rl_env.current_disturbance = scenario
+      print(f"\n[RL][{scenario}] Starting Episode {rl_current_episode + 1}/{rl_num_episodes}")
+    
+    # Execute one RL step per simulation frame
+    rl_action = rl_agent.select_action(rl_state)
+    rl_next_state, rl_reward, rl_done = rl_env.step(rl_action)
+    rl_agent.update(rl_state, rl_action, rl_reward, rl_next_state)
+    rl_state = rl_next_state
+    rl_step_counter += 1
+    
+    # Track energy
+    ep_energy = rl_metrics[scenario].get('current_energy', 0)
+    if rl_action >= rl_env.p.getNumJoints(rl_env.kuka):
+      ep_energy += 1.0
+    rl_metrics[scenario]['current_energy'] = ep_energy
+    
+    # Check episode completion
+    if rl_done or rl_step_counter >= rl_max_steps:
+      final_error = np.linalg.norm(rl_state[-4:-1] - rl_env.goal_pose[:3])
+      
+      if rl_done:
+        rl_metrics[scenario]['success'] += 1
+        print(f"[RL][{scenario}] Episode {rl_current_episode + 1} SUCCESS: steps={rl_step_counter}, error={final_error:.3f}, energy={ep_energy}")
+      else:
+        print(f"[RL][{scenario}] Episode {rl_current_episode + 1} TIMEOUT: steps={rl_step_counter}, error={final_error:.3f}, energy={ep_energy}")
+      
+      rl_metrics[scenario]['errors'].append(final_error)
+      rl_metrics[scenario]['steps'].append(rl_step_counter)
+      rl_metrics[scenario]['energy'].append(ep_energy)
+      rl_metrics[scenario]['episodes'] += 1
+      
+      # Reset for next episode
+      rl_step_counter = 0
+      rl_current_episode += 1
+      rl_metrics[scenario]['current_energy'] = 0
+      
+      # Save checkpoint every 100 episodes
+      if rl_current_episode % 100 == 0 and rl_current_episode > 0:
+        try:
+          rl_agent.save(f'rl_checkpoint_{scenario}_ep{rl_current_episode}')
+          print(f"💾 Checkpoint saved: {scenario} episode {rl_current_episode}")
+        except Exception as e:
+          print(f"⚠️  Failed to save checkpoint: {e}")
+      
+      # Check if scenario is complete
+      if rl_current_episode >= rl_num_episodes:
+        print(f"\n=== Scenario '{scenario}' Complete ===")
+        m = rl_metrics[scenario]
+        success_rate = 100.0 * m['success'] / m['episodes']
+        avg_error = np.mean(m['errors'])
+        avg_steps = np.mean(m['steps'])
+        avg_energy = np.mean(m['energy'])
+        print(f"Success Rate: {success_rate:5.1f}% | Avg Error: {avg_error:6.3f} | Avg Steps: {avg_steps:5.1f} | Avg Energy: {avg_energy:5.1f}\n")
+        
+        # Save final model for this scenario
+        try:
+          rl_agent.save(f'rl_final_{scenario}')
+          print(f"💾 Final model saved for scenario '{scenario}'")
+        except Exception as e:
+          print(f"⚠️  Failed to save final model: {e}")
+        
+        # Move to next scenario
+        rl_current_scenario_idx += 1
+        rl_current_episode = 0
+        
+        # Check if all scenarios complete
+        if rl_current_scenario_idx >= len(rl_scenarios):
+          print("\n=== RL Training Complete - All Scenarios ===")
+          for s in rl_scenarios:
+            m = rl_metrics[s]
+            success_rate = 100.0 * m['success'] / m['episodes']
+            avg_error = np.mean(m['errors'])
+            avg_steps = np.mean(m['steps'])
+            avg_energy = np.mean(m['energy'])
+            print(f"{s:10s} | Success: {success_rate:5.1f}% | Error: {avg_error:6.3f} | Steps: {avg_steps:5.1f} | Energy: {avg_energy:5.1f}")
+          
+          # Save metrics
+          with open('rl_metrics.json', 'w') as f:
+            json.dump(rl_metrics, f, indent=2)
+          print('\n💾 RL metrics saved to rl_metrics.json')
+          
+          # Disable training mode
+          rl_training_mode = False
+          print("🎓 RL Training Mode AUTO-DISABLED (all scenarios complete)\n")
+  
+  # === RL TRAJECTORY PLANNER CONTROL (if available) ===
+  if RL_AVAILABLE and rl_planner is not None:
+    if rl_execution_mode:
       # RL Execution Mode - Execute learned policy
       try:
         if not hasattr(rl_planner, '_execution_state'):
