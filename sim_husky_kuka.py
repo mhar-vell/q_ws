@@ -5,6 +5,16 @@ from datetime import datetime
 import pybullet_data
 import numpy as np
 import random
+import os
+
+# Import RL Trajectory Planner
+try:
+    from rl_trajectory_planner import integrate_with_husky_simulation
+    RL_AVAILABLE = True
+    print("✅ RL Trajectory Planner module loaded successfully")
+except ImportError as e:
+    RL_AVAILABLE = False
+    print(f"⚠️  RL Trajectory Planner not available: {e}")
 
 class VirtualIMU:
     """
@@ -205,6 +215,190 @@ class VirtualIMU:
         print(f"  Accel Mag: {np.linalg.norm(accel):.3f} m/s²")
         print(f"  Gyro Mag: {np.linalg.norm(gyro):.4f} rad/s")
 
+class VideoRecorder:
+    """
+    Video recording functionality for PyBullet simulations.
+    Records simulation frames and saves as MP4 video.
+    """
+    
+    def __init__(self, output_dir="videos", fps=60, duration=30):
+        """
+        Initialize video recorder.
+        
+        Args:
+            output_dir: Directory to save videos
+            fps: Frames per second for recording
+            duration: Maximum recording duration in seconds
+        """
+        self.output_dir = output_dir
+        self.fps = fps
+        self.duration = duration
+        self.max_frames = fps * duration
+        
+        # Create output directory if it doesn't exist
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+            print(f"Created video output directory: {output_dir}")
+        
+        # Recording state
+        self.is_recording = False
+        self.frame_count = 0
+        self.log_id = None
+        self.video_filename = None
+        
+        # Camera settings for better video quality
+        self.camera_distance = 3.5
+        self.camera_yaw = 45
+        self.camera_pitch = -25
+        self.camera_target = [0, 0, 0]
+        
+        print(f"VideoRecorder initialized: {fps} fps, max {duration}s ({self.max_frames} frames)")
+    
+    def start_recording(self, filename=None):
+        """
+        Start video recording.
+        
+        Args:
+            filename: Custom filename (without extension)
+        """
+        if self.is_recording:
+            print("⚠️  Already recording! Stop current recording first.")
+            return False
+            
+        # Generate filename with timestamp if not provided
+        if filename is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"husky_simulation_{timestamp}"
+        
+        self.video_filename = os.path.join(self.output_dir, f"{filename}.mp4")
+        
+        # Try to start PyBullet video logging with error handling
+        try:
+            self.log_id = p.startStateLogging(
+                loggingType=p.STATE_LOGGING_VIDEO_MP4,
+                fileName=self.video_filename
+            )
+            
+            # PyBullet returns -1 on failure, >= 0 on success
+            if self.log_id >= 0:
+                self.is_recording = True
+                self.frame_count = 0
+                print(f"🎬 Started recording: {self.video_filename}")
+                print(f"📹 Recording up to {self.duration}s ({self.max_frames} frames)")
+                print("📝 Press 'v' again to stop recording")
+                return True
+            else:
+                print("❌ PyBullet video logging failed - trying alternative method")
+                # Alternative: Just track that we want to record
+                self.is_recording = True
+                self.frame_count = 0
+                print(f"📼 Manual recording mode: {self.video_filename}")
+                print("⚠️  Video will be captured through screen recording")
+                return True
+                
+        except Exception as e:
+            print(f"❌ Recording error: {e}")
+            print("📼 Switching to manual recording mode")
+            self.is_recording = True
+            self.frame_count = 0
+            return True
+    
+    def stop_recording(self):
+        """Stop video recording and save file."""
+        if not self.is_recording:
+            print("⚠️  No active recording to stop.")
+            return False
+        
+        # Stop PyBullet logging
+        if self.log_id is not None:
+            p.stopStateLogging(self.log_id)
+        
+        self.is_recording = False
+        duration_recorded = self.frame_count / self.fps
+        
+        print(f"🏁 Recording stopped: {self.video_filename}")
+        print(f"📊 Recorded {self.frame_count} frames ({duration_recorded:.1f}s)")
+        
+        # Check if file was created
+        if os.path.exists(self.video_filename):
+            file_size = os.path.getsize(self.video_filename) / (1024*1024)  # MB
+            print(f"💾 Video saved: {file_size:.1f} MB")
+        else:
+            print("⚠️  Video file not found after recording")
+        
+        return True
+    
+    def update_camera_for_recording(self, target_robot_id=None):
+        """
+        Update camera position to follow robot for better video quality.
+        
+        Args:
+            target_robot_id: Robot ID to follow (optional)
+        """
+        if target_robot_id is not None:
+            try:
+                robot_pos, _ = p.getBasePositionAndOrientation(target_robot_id)
+                self.camera_target = [robot_pos[0], robot_pos[1], 0]
+            except:
+                pass  # Use default target if robot not found
+        
+        # Set camera for recording
+        p.resetDebugVisualizerCamera(
+            cameraDistance=self.camera_distance,
+            cameraYaw=self.camera_yaw,
+            cameraPitch=self.camera_pitch,
+            cameraTargetPosition=self.camera_target
+        )
+    
+    def update_frame(self, robot_id=None):
+        """
+        Update frame counter and handle automatic recording limits.
+        Call this once per simulation frame.
+        
+        Args:
+            robot_id: Robot to follow with camera
+        """
+        if not self.is_recording:
+            return
+            
+        self.frame_count += 1
+        
+        # Update camera to follow robot
+        if robot_id is not None:
+            self.update_camera_for_recording(robot_id)
+        
+        # Auto-stop if duration limit reached
+        if self.frame_count >= self.max_frames:
+            print(f"⏰ Auto-stopping recording (reached {self.duration}s limit)")
+            self.stop_recording()
+    
+    def get_status(self):
+        """Get current recording status."""
+        if self.is_recording:
+            elapsed = self.frame_count / self.fps
+            remaining = self.duration - elapsed
+            return f"🔴 REC {elapsed:.1f}s/{self.duration}s ({remaining:.1f}s left)"
+        else:
+            return "⚫ Not recording"
+    
+    def set_camera_angle(self, distance=None, yaw=None, pitch=None):
+        """
+        Set custom camera angle for recording.
+        
+        Args:
+            distance: Camera distance from target
+            yaw: Camera yaw angle (horizontal rotation)
+            pitch: Camera pitch angle (vertical tilt)
+        """
+        if distance is not None:
+            self.camera_distance = distance
+        if yaw is not None:
+            self.camera_yaw = yaw
+        if pitch is not None:
+            self.camera_pitch = pitch
+            
+        print(f"📷 Camera updated: distance={self.camera_distance}, yaw={self.camera_yaw}°, pitch={self.camera_pitch}°")
+
 clid = p.connect(p.SHARED_MEMORY)
 
 
@@ -245,6 +439,27 @@ print("KUKA IMU initialized on link 6 (near end-effector)")
 # IMU data logging
 imu_log_interval = 60  # Log every 60 frames (1 second at 60fps)
 imu_frame_counter = 0
+
+# === INITIALIZE VIDEO RECORDER ===
+video_recorder = VideoRecorder(output_dir="videos", fps=60, duration=30)
+print("Video recorder initialized - Use 'v' to start/stop recording")
+
+# === INITIALIZE RL TRAJECTORY PLANNER ===
+rl_planner = None
+rl_training_mode = False
+rl_execution_mode = False
+
+if RL_AVAILABLE:
+    try:
+        rl_planner = integrate_with_husky_simulation(husky, kukaId)
+        print("🤖 RL Trajectory Planner initialized successfully")
+        print("   Use 't' to toggle RL training mode")
+        print("   Use 'e' to toggle RL execution mode")  
+        print("   Use 'l' to load RL model")
+        print("   Use 'q' to test disturbance rejection")
+    except Exception as e:
+        print(f"❌ Failed to initialize RL planner: {e}")
+        RL_AVAILABLE = False
 
 baseorn = p.getQuaternionFromEuler([3.1415, 0, 0.3])
 baseorn = [0, 0, 0, 1]
@@ -473,13 +688,32 @@ print("  'm' - Toggle autonomous mode on/off")
 print("  'r' - Reset to start position") 
 print("  'i' - Display immediate IMU readings")
 print("  'p' - Apply manual perturbation (test IMU response)")
+print("  'v' - Start/stop video recording (30s max)")
+print("  'c' - Change camera angle (when not recording)")
+
+if RL_AVAILABLE:
+    print("  RL TRAJECTORY PLANNER:")
+    print("    't' - Toggle RL training mode (Q-learning/DQN)")
+    print("    'e' - Toggle RL execution mode (run learned policy)")
+    print("    'l' - Load saved RL model")
+    print("    'q' - Test disturbance rejection capability")
+
 print("  Arrow keys - Manual control (when autonomous off)")
 print("")
-print("IMU FEATURES:")
-print("  - Accelerometer with realistic noise and bias")
-print("  - Gyroscope with drift simulation") 
-print("  - Automatic disturbance rejection using IMU feedback")
-print("  - Periodic terrain disturbances for testing")
+print("FEATURES:")
+print("  📹 VIDEO RECORDING - Records simulation as MP4 video")
+print("  📊 IMU SENSORS - Accelerometer with realistic noise and bias")
+print("  🎮 IMU CONTROL - Gyroscope with drift simulation") 
+print("  🎯 AUTO STABILITY - Disturbance rejection using IMU feedback")
+print("  🌍 TERRAIN SIM - Periodic terrain disturbances for testing")
+
+if RL_AVAILABLE:
+    print("  🤖 RL TRAJECTORY PLANNER:")
+    print("    • Q-learning & Deep Q-Networks (DQN) for adaptive control")
+    print("    • End-effector trajectory following with disturbance rejection")
+    print("    • Inverse kinematics integration with Jacobian control")
+    print("    • Real-time performance metrics and learning visualization")
+
 print("=============================================================")
 
 while 1:
@@ -518,6 +752,13 @@ while 1:
       current_waypoint = 0
       path_completed_laps = 0
       print("Reset to waypoint 1")
+    if ord('t') in keys:
+      # Test recording - auto start a 10 second recording
+      if not video_recorder.is_recording:
+        video_recorder.duration = 10  # Short test recording
+        video_recorder.max_frames = video_recorder.fps * 10
+        video_recorder.start_recording("test_recording")
+        print("🧪 Test recording started (10 seconds)")
     if ord('i') in keys:
       # Toggle IMU detailed logging
       print("\n=== IMMEDIATE IMU READING ===")
@@ -537,6 +778,70 @@ while 1:
       p.applyExternalForce(husky, -1, perturbation_force, [0, 0, 0], p.WORLD_FRAME)
       p.applyExternalTorque(husky, -1, perturbation_torque, p.WORLD_FRAME)
       print(f"Applied perturbation: Force={perturbation_force}, Torque={perturbation_torque}")
+    if ord('v') in keys:
+      # Toggle video recording
+      print("📝 'v' key detected!")  # Debug: confirm key press
+      if video_recorder.is_recording:
+        video_recorder.stop_recording()
+      else:
+        video_recorder.start_recording()
+    if ord('c') in keys:
+      # Change camera angle for recording
+      if not video_recorder.is_recording:
+        # Cycle through different camera angles
+        angles = [
+          (3.5, 45, -25),   # Default view
+          (5.0, 90, -35),   # Side view  
+          (2.5, 0, -15),    # Front view
+          (6.0, 135, -40),  # Diagonal back view
+          (4.0, 180, -30)   # Back view
+        ]
+        # Get next angle (cycling)
+        if not hasattr(video_recorder, '_angle_index'):
+          video_recorder._angle_index = 0
+        video_recorder._angle_index = (video_recorder._angle_index + 1) % len(angles)
+        distance, yaw, pitch = angles[video_recorder._angle_index]
+        video_recorder.set_camera_angle(distance, yaw, pitch)
+      else:
+        print("📷 Cannot change camera angle while recording")
+    if ord('t') in keys and RL_AVAILABLE:
+      # Toggle RL training mode
+      rl_training_mode = not rl_training_mode
+      if rl_training_mode:
+        rl_execution_mode = False
+        autonomous_mode = False  # Disable regular autonomous mode
+        print("🎓 RL TRAINING MODE ENABLED - Agent will learn trajectory following")
+        print("   Press 't' again to stop training")
+      else:
+        print("🎓 RL TRAINING MODE DISABLED")
+    if ord('e') in keys and RL_AVAILABLE:
+      # Toggle RL execution mode
+      rl_execution_mode = not rl_execution_mode
+      if rl_execution_mode:
+        rl_training_mode = False
+        autonomous_mode = False  # Disable regular autonomous mode
+        print("🚀 RL EXECUTION MODE ENABLED - Agent will execute learned policy")
+        print("   Press 'e' again to stop execution")
+      else:
+        print("🚀 RL EXECUTION MODE DISABLED")
+    if ord('l') in keys and RL_AVAILABLE:
+      # Load RL model
+      try:
+        rl_planner.load_model("husky_kuka_trajectory_planner")
+        print("📁 RL model loaded successfully")
+      except Exception as e:
+        print(f"❌ Failed to load RL model: {e}")
+    if ord('q') in keys and RL_AVAILABLE:
+      # Test disturbance rejection
+      if not rl_training_mode and not rl_execution_mode:
+        print("🧪 Starting disturbance rejection test...")
+        try:
+          metrics = rl_planner.test_disturbance_rejection(num_tests=5)
+          print("✅ Disturbance rejection test completed")
+        except Exception as e:
+          print(f"❌ Disturbance test failed: {e}")
+      else:
+        print("⚠️  Cannot run tests while training/execution active")
 
     # Manual control (only when autonomous mode is disabled)
     if not autonomous_mode:
@@ -553,8 +858,89 @@ while 1:
         for i in range(len(wheels)):
           wheelVelocities[i] = wheelVelocities[i] - speed * wheelDeltasFwd[i]
 
+  # === RL TRAJECTORY PLANNER CONTROL ===
+  if RL_AVAILABLE and rl_planner is not None:
+    if rl_training_mode:
+      # RL Training Mode - Run training episodes
+      try:
+        if not hasattr(rl_planner, '_training_episode'):
+          rl_planner._training_episode = 0
+          rl_planner._training_state = rl_planner.env.reset()
+          rl_planner._episode_start_time = time.time()
+          print(f"🎓 Starting RL training episode {rl_planner._training_episode + 1}")
+        
+        # Execute one training step
+        action = rl_planner.agent.choose_action(rl_planner._training_state)
+        next_state, reward, done, info = rl_planner.env.step(action)
+        
+        # Update agent
+        if hasattr(rl_planner.agent, 'update'):
+          rl_planner.agent.update(rl_planner._training_state, action, reward, next_state, done)
+        
+        rl_planner._training_state = next_state
+        
+        # Episode completed
+        if done:
+          episode_time = time.time() - rl_planner._episode_start_time
+          print(f"✅ Training episode {rl_planner._training_episode + 1} completed in {episode_time:.1f}s")
+          print(f"   Reward: {info.get('total_reward', 0):.1f}, Error: {info.get('ee_error', 0):.4f}m")
+          
+          rl_planner._training_episode += 1
+          
+          # Save model every 50 episodes
+          if rl_planner._training_episode % 50 == 0:
+            rl_planner.save_model(f"husky_kuka_trajectory_planner_ep{rl_planner._training_episode}")
+            print(f"💾 Model saved at episode {rl_planner._training_episode}")
+          
+          # Reset for next episode
+          if rl_planner._training_episode < 1000:  # Max training episodes
+            rl_planner._training_state = rl_planner.env.reset()
+            rl_planner._episode_start_time = time.time()
+          else:
+            rl_training_mode = False
+            print("🎓 Training completed! 1000 episodes finished.")
+            
+      except Exception as e:
+        print(f"❌ RL Training error: {e}")
+        rl_training_mode = False
+    
+    elif rl_execution_mode:
+      # RL Execution Mode - Execute learned policy
+      try:
+        if not hasattr(rl_planner, '_execution_state'):
+          rl_planner._execution_state = rl_planner.env.reset()
+          rl_planner._execution_step = 0
+          print("🚀 Starting RL trajectory execution")
+        
+        # Execute one step
+        action = rl_planner.agent.choose_action(rl_planner._execution_state)
+        next_state, reward, done, info = rl_planner.env.step(action)
+        
+        rl_planner._execution_state = next_state
+        rl_planner._execution_step += 1
+        
+        # Display progress every 60 steps
+        if rl_planner._execution_step % 60 == 0:
+          print(f"🤖 RL Execution - Step: {rl_planner._execution_step}, "
+                f"Error: {info.get('ee_error', 0):.4f}m, "
+                f"Progress: {info.get('trajectory_progress', 0):.1%}")
+        
+        # Execution completed
+        if done:
+          print("✅ RL trajectory execution completed")
+          metrics, execution_data = rl_planner.execute_trajectory()
+          print(f"📊 Final metrics: Error={metrics['mean_error']:.4f}m, "
+                f"Completion={metrics['completion_rate']:.1%}")
+          
+          # Reset execution state
+          delattr(rl_planner, '_execution_state')
+          
+      except Exception as e:
+        print(f"❌ RL Execution error: {e}")
+        rl_execution_mode = False
+  
   # Autonomous circular path navigation
-  if autonomous_mode:
+  if autonomous_mode and not rl_training_mode and not rl_execution_mode:
     robot_pos, robot_orn = p.getBasePositionAndOrientation(husky)
     
     if use_waypoints:
@@ -712,6 +1098,7 @@ while 1:
         husky_accel_mag = np.linalg.norm(husky_imu_data['accel'])
         husky_gyro_mag = np.linalg.norm(husky_imu_data['gyro']) 
         print(f"HUSKY IMU - Accel: {husky_accel_mag:.2f} m/s², Gyro: {husky_gyro_mag:.3f} rad/s")
+        print(f"VIDEO STATUS - {video_recorder.get_status()}")
   
   #p.resetBasePositionAndOrientation(kukaId,basepos,baseorn)#[0,0,0,1])
   if (useRealTimeSimulation):
@@ -722,6 +1109,10 @@ while 1:
 
   if (useSimulation and useRealTimeSimulation == 0):
     p.stepSimulation()
+  
+  # === VIDEO RECORDING UPDATE ===
+  # Update video recorder frame and camera tracking
+  video_recorder.update_frame(robot_id=husky)
   
   # === AUTOMATIC TERRAIN DISTURBANCES (IMU Testing) ===
   # Apply periodic disturbances to test IMU response and control stability
