@@ -332,10 +332,18 @@ class DQNAgent:
         
         # Sample random batch
         batch = random.sample(self.memory, self.batch_size)
-        states = self.torch.FloatTensor([e[0] for e in batch]).to(self.device)
-        actions = self.torch.LongTensor([e[1] for e in batch]).to(self.device)
-        rewards = self.torch.FloatTensor([e[2] for e in batch]).to(self.device)
-        next_states = self.torch.FloatTensor([e[3] for e in batch]).to(self.device)
+        
+        # Convert to numpy arrays first (much faster than list of arrays)
+        states = np.array([e[0] for e in batch], dtype=np.float32)
+        actions = np.array([e[1] for e in batch], dtype=np.int64)
+        rewards = np.array([e[2] for e in batch], dtype=np.float32)
+        next_states = np.array([e[3] for e in batch], dtype=np.float32)
+        
+        # Now convert to tensors (fast!)
+        states = self.torch.from_numpy(states).to(self.device)
+        actions = self.torch.from_numpy(actions).to(self.device)
+        rewards = self.torch.from_numpy(rewards).to(self.device)
+        next_states = self.torch.from_numpy(next_states).to(self.device)
         
         # Compute Q(s,a)
         q_values = self.q_network(states).gather(1, actions.unsqueeze(1)).squeeze(1)

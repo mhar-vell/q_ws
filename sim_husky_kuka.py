@@ -767,6 +767,7 @@ print("  'i' - Display immediate IMU readings")
 print("  'p' - Apply manual perturbation (test IMU response)")
 print("  'v' - Start/stop video recording (30s max)")
 print("  'c' - Change camera angle (when not recording)")
+print("  'x' - Quick test recording (10 seconds)")
 
 if RL_AVAILABLE:
     print("  RL TRAJECTORY PLANNER:")
@@ -829,13 +830,13 @@ while 1:
       current_waypoint = 0
       path_completed_laps = 0
       print("Reset to waypoint 1")
-    if ord('t') in keys:
+    if ord('x') in keys:
       # Test recording - auto start a 10 second recording
       if not video_recorder.is_recording:
         video_recorder.duration = 10  # Short test recording
         video_recorder.max_frames = video_recorder.fps * 10
         video_recorder.start_recording("test_recording")
-        print("🧪 Test recording started (10 seconds)")
+        print("🧪 Test recording started (10 seconds) - Press 'x' key was used")
     if ord('i') in keys:
       # Toggle IMU detailed logging
       print("\n=== IMMEDIATE IMU READING ===")
