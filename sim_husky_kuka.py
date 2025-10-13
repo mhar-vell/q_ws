@@ -2,8 +2,208 @@ import pybullet as p
 import time
 import math
 from datetime import datetime
-from datetime import datetime
 import pybullet_data
+import numpy as np
+import random
+
+class VirtualIMU:
+    """
+    Virtual IMU sensor for PyBullet simulation with realistic noise and bias modeling.
+    Provides accelerometer and gyroscope data from robot link states.
+    """
+    
+    def __init__(self, robot_id, link_index=-1, sample_rate=60.0):
+        """
+        Initialize virtual IMU sensor.
+        
+        Args:
+            robot_id: PyBullet body ID of the robot
+            link_index: Link index to attach IMU (-1 for base link)
+            sample_rate: IMU sampling rate in Hz
+        """
+        self.robot_id = robot_id
+        self.link_index = link_index
+        self.sample_rate = sample_rate
+        self.dt = 1.0 / sample_rate
+        
+        # Previous state for velocity/acceleration calculation
+        self.prev_linear_vel = np.array([0.0, 0.0, 0.0])
+        self.prev_angular_vel = np.array([0.0, 0.0, 0.0])
+        self.prev_time = time.time()
+        
+        # IMU sensor characteristics (realistic noise parameters)
+        # Accelerometer parameters
+        self.accel_noise_std = 0.02  # m/s² - accelerometer noise standard deviation
+        self.accel_bias = np.array([0.005, -0.003, 0.008])  # m/s² - bias offset
+        self.accel_bias_instability = 0.001  # m/s² - bias drift over time
+        
+        # Gyroscope parameters  
+        self.gyro_noise_std = 0.0035  # rad/s - gyroscope noise standard deviation
+        self.gyro_bias = np.array([0.002, 0.001, -0.0015])  # rad/s - bias offset
+        self.gyro_bias_instability = 0.0005  # rad/s - bias drift over time
+        
+        # Gravity vector in world frame
+        self.gravity = np.array([0.0, 0.0, -9.81])  # m/s²
+        
+        # Low-pass filter for smoothing (optional)
+        self.use_filter = True
+        self.filter_alpha = 0.8  # Filter coefficient (0-1, higher = less filtering)
+        self.filtered_accel = np.array([0.0, 0.0, 0.0])
+        self.filtered_gyro = np.array([0.0, 0.0, 0.0])
+        
+        print(f"Virtual IMU initialized on robot {robot_id}, link {link_index}")
+        print(f"Sample rate: {sample_rate} Hz, dt: {self.dt:.4f}s")
+        
+    def get_link_state(self):
+        """Get current link state (position, orientation, velocities)."""
+        if self.link_index == -1:
+            # Base link
+            pos, orn = p.getBasePositionAndOrientation(self.robot_id)
+            lin_vel, ang_vel = p.getBaseVelocity(self.robot_id)
+            return pos, orn, lin_vel, ang_vel
+        else:
+            # Specific link
+            link_state = p.getLinkState(self.robot_id, self.link_index, 
+                                      computeLinkVelocity=1)
+            pos = link_state[0]  # World position
+            orn = link_state[1]  # World orientation  
+            lin_vel = link_state[6]  # Linear velocity
+            ang_vel = link_state[7]  # Angular velocity
+            return pos, orn, lin_vel, ang_vel
+    
+    def world_to_body_frame(self, vector, orientation):
+        """Transform vector from world frame to body frame using quaternion."""
+        # Convert quaternion to rotation matrix and transpose for inverse transform
+        rot_matrix = np.array(p.getMatrixFromQuaternion(orientation)).reshape(3, 3)
+        return rot_matrix.T @ vector
+    
+    def update_bias_drift(self):
+        """Simulate realistic bias drift over time."""
+        # Random walk bias drift
+        self.accel_bias += np.random.normal(0, self.accel_bias_instability * self.dt, 3)
+        self.gyro_bias += np.random.normal(0, self.gyro_bias_instability * self.dt, 3)
+        
+        # Limit bias to realistic ranges
+        self.accel_bias = np.clip(self.accel_bias, -0.05, 0.05)  # ±0.05 m/s²
+        self.gyro_bias = np.clip(self.gyro_bias, -0.01, 0.01)   # ±0.01 rad/s
+    
+    def read_imu(self):
+        """
+        Read IMU data (accelerometer and gyroscope) with realistic noise and bias.
+        
+        Returns:
+            dict: IMU data with keys 'accel', 'gyro', 'timestamp'
+                 All data in body frame (x: forward, y: left, z: up)
+        """
+        current_time = time.time()
+        
+        # Get current link state
+        pos, orn, lin_vel, ang_vel = self.get_link_state()
+        
+        # Convert to numpy arrays
+        lin_vel = np.array(lin_vel)
+        ang_vel = np.array(ang_vel)
+        
+        # === ACCELEROMETER SIMULATION ===
+        # Calculate linear acceleration from velocity difference
+        if hasattr(self, 'prev_linear_vel'):
+            dt_actual = current_time - self.prev_time
+            if dt_actual > 0:
+                # Linear acceleration in world frame
+                linear_accel_world = (lin_vel - self.prev_linear_vel) / dt_actual
+                
+                # Add gravity (since accelerometer measures specific force)
+                specific_force_world = linear_accel_world - self.gravity
+                
+                # Transform to body frame
+                accel_body = self.world_to_body_frame(specific_force_world, orn)
+            else:
+                accel_body = np.array([0.0, 0.0, 0.0])
+        else:
+            accel_body = np.array([0.0, 0.0, 0.0])
+        
+        # === GYROSCOPE SIMULATION ===
+        # Angular velocity is already available from PyBullet
+        # Transform to body frame
+        gyro_body = self.world_to_body_frame(ang_vel, orn)
+        
+        # === ADD REALISTIC NOISE AND BIAS ===
+        # Update bias drift
+        self.update_bias_drift()
+        
+        # Add noise and bias to accelerometer
+        accel_noise = np.random.normal(0, self.accel_noise_std, 3)
+        accel_measured = accel_body + self.accel_bias + accel_noise
+        
+        # Add noise and bias to gyroscope
+        gyro_noise = np.random.normal(0, self.gyro_noise_std, 3)
+        gyro_measured = gyro_body + self.gyro_bias + gyro_noise
+        
+        # === OPTIONAL LOW-PASS FILTERING ===
+        if self.use_filter:
+            self.filtered_accel = (self.filter_alpha * self.filtered_accel + 
+                                 (1 - self.filter_alpha) * accel_measured)
+            self.filtered_gyro = (self.filter_alpha * self.filtered_gyro + 
+                                (1 - self.filter_alpha) * gyro_measured)
+            accel_final = self.filtered_accel.copy()
+            gyro_final = self.filtered_gyro.copy()
+        else:
+            accel_final = accel_measured
+            gyro_final = gyro_measured
+        
+        # Update previous state
+        self.prev_linear_vel = lin_vel.copy()
+        self.prev_angular_vel = ang_vel.copy()
+        self.prev_time = current_time
+        
+        # Return IMU data
+        imu_data = {
+            'timestamp': current_time,
+            'accel': accel_final,  # m/s² in body frame [x, y, z]
+            'gyro': gyro_final,    # rad/s in body frame [x, y, z]
+            'accel_raw': accel_measured,  # Without filtering
+            'gyro_raw': gyro_measured,    # Without filtering
+            'linear_vel_world': lin_vel,   # For debugging
+            'angular_vel_world': ang_vel,  # For debugging
+        }
+        
+        return imu_data
+    
+    def get_orientation_estimate(self, dt=None):
+        """
+        Simple orientation estimation from gyroscope integration.
+        Note: This is basic integration - for production use Kalman filter.
+        
+        Returns:
+            np.array: Estimated orientation [roll, pitch, yaw] in radians
+        """
+        if dt is None:
+            dt = self.dt
+            
+        imu_data = self.read_imu()
+        gyro = imu_data['gyro']
+        
+        if not hasattr(self, 'estimated_orientation'):
+            self.estimated_orientation = np.array([0.0, 0.0, 0.0])
+        
+        # Simple Euler integration (basic - can be improved)
+        self.estimated_orientation += gyro * dt
+        
+        return self.estimated_orientation.copy()
+    
+    def print_imu_status(self, imu_data=None):
+        """Print current IMU readings for debugging."""
+        if imu_data is None:
+            imu_data = self.read_imu()
+            
+        accel = imu_data['accel']
+        gyro = imu_data['gyro']
+        
+        print(f"IMU Status - Time: {imu_data['timestamp']:.3f}")
+        print(f"  Accel [m/s²]: X={accel[0]:.3f}, Y={accel[1]:.3f}, Z={accel[2]:.3f}")
+        print(f"  Gyro [rad/s]: X={gyro[0]:.4f}, Y={gyro[1]:.4f}, Z={gyro[2]:.4f}")
+        print(f"  Accel Mag: {np.linalg.norm(accel):.3f} m/s²")
+        print(f"  Gyro Mag: {np.linalg.norm(gyro):.4f} rad/s")
 
 clid = p.connect(p.SHARED_MEMORY)
 
@@ -32,6 +232,19 @@ for jointIndex in range(p.getNumJoints(ob)):
 
 cid = p.createConstraint(husky, -1, kukaId, -1, p.JOINT_FIXED, [0, 0, 0], [0, 0, 0], [0., 0., -.5],
                          [0, 0, 0, 1])
+
+# === INITIALIZE VIRTUAL IMU SENSOR ===
+# Create IMU attached to Husky base link
+husky_imu = VirtualIMU(robot_id=husky, link_index=-1, sample_rate=60.0)
+print("Husky IMU initialized on base link")
+
+# Optional: Create IMU on KUKA arm (end-effector or specific link)
+kuka_imu = VirtualIMU(robot_id=kukaId, link_index=6, sample_rate=60.0)  # Link 6 is near end-effector
+print("KUKA IMU initialized on link 6 (near end-effector)")
+
+# IMU data logging
+imu_log_interval = 60  # Log every 60 frames (1 second at 60fps)
+imu_frame_counter = 0
 
 baseorn = p.getQuaternionFromEuler([3.1415, 0, 0.3])
 baseorn = [0, 0, 0, 1]
@@ -250,14 +463,43 @@ add_circular_path_markers()
 # To switch to square path, comment out the line above and uncomment the line below
 # add_square_path_markers()
 
-print("=== Square Path Autonomous Navigation ===")
-print("Husky will travel through 4 waypoints forming a 1.5x1.5m square")
-print("Manipulator trajectory will be centered in the square")
-print("Press 'm' to toggle autonomous mode on/off")
-print("Press 'r' to reset to waypoint 1")
-print("==========================================")
+print("=== Circular Path Autonomous Navigation with Virtual IMU ===")
+print("Husky will follow a smooth circular path with IMU-enhanced control")
+print("Manipulator trajectory will be centered in the circular path")
+print("Virtual IMU sensors monitor base and arm motion with realistic noise")
+print("")
+print("CONTROLS:")
+print("  'm' - Toggle autonomous mode on/off")
+print("  'r' - Reset to start position") 
+print("  'i' - Display immediate IMU readings")
+print("  'p' - Apply manual perturbation (test IMU response)")
+print("  Arrow keys - Manual control (when autonomous off)")
+print("")
+print("IMU FEATURES:")
+print("  - Accelerometer with realistic noise and bias")
+print("  - Gyroscope with drift simulation") 
+print("  - Automatic disturbance rejection using IMU feedback")
+print("  - Periodic terrain disturbances for testing")
+print("=============================================================")
 
 while 1:
+  # === IMU SENSOR UPDATES ===
+  # Read IMU data from both sensors every frame for real-time feedback
+  husky_imu_data = husky_imu.read_imu()
+  kuka_imu_data = kuka_imu.read_imu()
+  
+  # Increment frame counter for periodic logging
+  imu_frame_counter += 1
+  
+  # Log IMU data periodically (every 1 second)
+  if imu_frame_counter % imu_log_interval == 0:
+    print(f"\n=== IMU DATA UPDATE (Frame {imu_frame_counter}) ===")
+    print("HUSKY BASE IMU:")
+    husky_imu.print_imu_status(husky_imu_data)
+    print("\nKUKA ARM IMU (Link 6):")
+    kuka_imu.print_imu_status(kuka_imu_data)
+    print("=" * 50)
+  
   keys = p.getKeyboardEvents()
   shift = 0.01
   wheelVelocities = [0, 0, 0, 0]
@@ -276,6 +518,25 @@ while 1:
       current_waypoint = 0
       path_completed_laps = 0
       print("Reset to waypoint 1")
+    if ord('i') in keys:
+      # Toggle IMU detailed logging
+      print("\n=== IMMEDIATE IMU READING ===")
+      print("HUSKY BASE IMU:")
+      husky_imu.print_imu_status()
+      print("KUKA ARM IMU:")
+      kuka_imu.print_imu_status()
+      print("=" * 30)
+    if ord('p') in keys:
+      # Apply random perturbation to test IMU response
+      perturbation_force = [
+          random.uniform(-50, 50),
+          random.uniform(-50, 50), 
+          0
+      ]
+      perturbation_torque = [0, 0, random.uniform(-10, 10)]
+      p.applyExternalForce(husky, -1, perturbation_force, [0, 0, 0], p.WORLD_FRAME)
+      p.applyExternalTorque(husky, -1, perturbation_torque, p.WORLD_FRAME)
+      print(f"Applied perturbation: Force={perturbation_force}, Torque={perturbation_torque}")
 
     # Manual control (only when autonomous mode is disabled)
     if not autonomous_mode:
@@ -344,7 +605,33 @@ while 1:
     while angle_diff < -math.pi:
       angle_diff += 2 * math.pi
     
-    # Simple proportional controller for navigation
+    # === IMU-ENHANCED NAVIGATION CONTROL ===
+    # Use IMU data for improved control stability and disturbance rejection
+    husky_accel = husky_imu_data['accel']
+    husky_gyro = husky_imu_data['gyro']
+    
+    # Detect excessive acceleration (disturbances) and adjust control
+    accel_magnitude = np.linalg.norm(husky_accel)
+    gyro_magnitude = np.linalg.norm(husky_gyro)
+    
+    # Stability thresholds (accounting for gravity ~9.81 m/s²)
+    max_stable_accel = 5.0   # m/s² - above gravity indicates disturbance  
+    max_stable_gyro = 0.5     # rad/s - above this indicates spinning
+    
+    # Adjust control gains based on IMU feedback
+    if accel_magnitude > max_stable_accel:
+        # Robot is experiencing disturbance - reduce gains for stability
+        stability_factor = 0.5
+        print(f"IMU: High acceleration detected ({accel_magnitude:.2f} m/s²) - Reducing control gains")
+    elif gyro_magnitude > max_stable_gyro:
+        # Robot is spinning too fast - reduce turn rate
+        stability_factor = 0.3
+        print(f"IMU: High rotation detected ({gyro_magnitude:.3f} rad/s) - Reducing turn rate")
+    else:
+        # Normal operation
+        stability_factor = 1.0
+    
+    # Simple proportional controller for navigation with IMU feedback
     angle_threshold = 0.2  # ~11 degrees
 
 # === ALTERNATIVE: SQUARE PATH NAVIGATION (COMMENTED OUT) ===
@@ -384,14 +671,15 @@ while 1:
 #         print(f"Reached waypoint {current_waypoint + 1}")
     
     if abs(angle_diff) > angle_threshold:
-      # Turn towards target
+      # Turn towards target with IMU-based stability control
       turn_direction = 1 if angle_diff > 0 else -1
+      adjusted_speed = autonomous_speed * stability_factor
       for i in range(len(wheels)):
-        wheelVelocities[i] = turn_direction * autonomous_speed * wheelDeltasTurn[i]
+        wheelVelocities[i] = turn_direction * adjusted_speed * wheelDeltasTurn[i]
     else:
-      # Move forward with steering correction
-      forward_speed = autonomous_speed
-      turn_correction = angle_diff * 0.3  # Gentle steering correction
+      # Move forward with steering correction and IMU stability
+      forward_speed = autonomous_speed * stability_factor
+      turn_correction = angle_diff * 0.3 * stability_factor  # IMU-adjusted steering
       
       for i in range(len(wheels)):
         wheelVelocities[i] = forward_speed * wheelDeltasFwd[i] + turn_correction * wheelDeltasTurn[i]
@@ -419,6 +707,11 @@ while 1:
         distance_to_target = math.sqrt((target_x - robot_pos[0])**2 + (target_y - robot_pos[1])**2)
         phase_degrees = (path_phase * 180 / math.pi) % 360
         print(f"CIRCULAR PATH - Lap: {path_completed_laps}, Phase: {phase_degrees:.1f}°, Distance: {distance_to_target:.2f}m")
+        
+        # Add IMU status to periodic display
+        husky_accel_mag = np.linalg.norm(husky_imu_data['accel'])
+        husky_gyro_mag = np.linalg.norm(husky_imu_data['gyro']) 
+        print(f"HUSKY IMU - Accel: {husky_accel_mag:.2f} m/s², Gyro: {husky_gyro_mag:.3f} rad/s")
   
   #p.resetBasePositionAndOrientation(kukaId,basepos,baseorn)#[0,0,0,1])
   if (useRealTimeSimulation):
@@ -429,6 +722,26 @@ while 1:
 
   if (useSimulation and useRealTimeSimulation == 0):
     p.stepSimulation()
+  
+  # === AUTOMATIC TERRAIN DISTURBANCES (IMU Testing) ===
+  # Apply periodic disturbances to test IMU response and control stability
+  if autonomous_mode and (imu_frame_counter % 400 == 0):  # Every ~6.7 seconds at 60fps
+    # Random terrain-like disturbances
+    terrain_force = [
+        random.uniform(-20, 20),   # X-axis push/pull
+        random.uniform(-20, 20),   # Y-axis push/pull  
+        random.uniform(-5, 5)      # Small vertical bump
+    ]
+    terrain_torque = [
+        random.uniform(-5, 5),     # Roll disturbance
+        random.uniform(-5, 5),     # Pitch disturbance 
+        random.uniform(-3, 3)      # Yaw disturbance
+    ]
+    
+    p.applyExternalForce(husky, -1, terrain_force, [0, 0, 0], p.WORLD_FRAME)
+    p.applyExternalTorque(husky, -1, terrain_torque, p.WORLD_FRAME)
+    
+    print(f"Applied terrain disturbance: F={terrain_force}, T={terrain_torque}")
 
   for i in range(1):
     # Manipulator trajectory centered on the circular path
