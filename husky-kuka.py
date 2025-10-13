@@ -14,6 +14,11 @@ if (clid < 0):
   p.connect(p.GUI)
 
 p.setPhysicsEngineParameter(enableConeFriction=0)
+# Improve simulation stability
+p.setPhysicsEngineParameter(numSolverIterations=50)
+p.setPhysicsEngineParameter(fixedTimeStep=1./240.)
+p.setPhysicsEngineParameter(numSubSteps=1)
+p.setPhysicsEngineParameter(contactBreakingThreshold=0.001)
 
 p.setAdditionalSearchPath(pybullet_data.getDataPath())
 
@@ -79,15 +84,44 @@ basepos = [0, 0, 0]
 ang = 0
 
 # Perturbation parameters
-enable_perturbations = True
-perturbation_magnitude_pos = 0.02  # Maximum position perturbation (meters)
-perturbation_magnitude_ang = 0.05  # Maximum angular perturbation (radians)
-perturbation_frequency = 0.1       # Probability of perturbation per timestep (0-1)
-base_perturbation = [0, 0, 0]     # Current base position perturbation
-ang_perturbation = 0              # Current angular perturbation
+enable_perturbations = False      # Start with perturbations disabled
+perturbation_magnitude_pos = 0.005 # Much smaller perturbations
+perturbation_magnitude_ang = 0.01  # Much smaller angular perturbations  
+perturbation_frequency = 0.01      # Much lower frequency
+base_damping = 1.5                # Higher damping for more stability
+angular_damping = 1.5             # Higher angular damping
 
-# Perturbation parameters
-enable_perturbations = True
+# Autonomous movement parameters
+autonomous_mode = False           # Start in manual mode for stability
+autonomous_speed = 0.2            # Reduced base speed for smoother movements
+movement_change_frequency = 0.005 # Much lower frequency - change less often
+current_movement_pattern = 0      # Current movement pattern (0-4)
+movement_duration = 0             # How long to maintain current movement
+max_movement_duration = 600       # Longer duration for each movement pattern
+movement_patterns = [
+    "stop",           # 0: No movement
+    "forward",        # 1: Move forward
+    "backward",       # 2: Move backward  
+    "turn_left",      # 3: Turn left
+    "turn_right",     # 4: Turn right
+    "circle_left",    # 5: Move in left circle
+    "circle_right",   # 6: Move in right circle
+    "figure_eight"    # 7: Figure-8 pattern
+]
+figure_eight_phase = 0            # Phase for figure-8 movement
+
+# IMU sensor parameters
+enable_imu = True                 # Enable IMU sensor readings
+imu_noise_level = 0.005          # Reduced noise level
+imu_sample_rate = 240            # IMU sample rate (Hz) - matches simulation rate
+previous_velocity = [0, 0, 0]    # Previous velocity for acceleration calculation
+previous_angular_velocity = [0, 0, 0]  # Previous angular velocity
+imu_data_history = []            # Store recent IMU readings for filtering
+max_imu_history = 10             # Number of recent readings to store
+show_imu_data = False            # Toggle IMU data display
+
+# Add damping to the base to prevent excessive oscillations
+p.changeDynamics(husky, -1, linearDamping=base_damping, angularDamping=angular_damping)
 perturbation_magnitude_pos = 0.02  # Maximum position perturbation (meters)
 perturbation_magnitude_ang = 0.05  # Maximum angular perturbation (radians)
 perturbation_frequency = 0.1       # Probability of perturbation per timestep (0-1)
@@ -123,13 +157,26 @@ wheelDeltasTurn = [1, -1, 1, -1]
 wheelDeltasFwd = [1, 1, 1, 1]
 
 print("=== Controls ===")
-print("Arrow keys: Move Husky")
+print("m: Toggle Autonomous/Manual mode")
+print("Arrow keys: Move Husky (Manual mode only)")
 print("a/d: Move target left/right")
 print("s: Save world state")
 print("p: Toggle perturbations on/off")
 print("1/2: Decrease/increase perturbation frequency")
-print("3/4: Decrease/increase position perturbation magnitude")
-print("5/6: Decrease/increase angular perturbation magnitude")
+print("3/4: Decrease/increase force perturbation magnitude")
+print("5/6: Decrease/increase torque perturbation magnitude")
+print("7/8: Decrease/increase base damping")
+print("9/0: Decrease/increase autonomous speed")
+print("i: Toggle IMU data display")
+print("u: Toggle IMU sensor on/off")
+print("================")
+print(f"Starting in {'AUTONOMOUS' if autonomous_mode else 'MANUAL'} mode")
+print(f"Perturbations: {'ENABLED' if enable_perturbations else 'DISABLED (press p to enable)'}")
+print(f"IMU sensor: {'ENABLED' if enable_imu else 'DISABLED'}")
+if enable_imu:
+  print(f"IMU sample rate: {imu_sample_rate} Hz, Noise level: {imu_noise_level}")
+print("Tip: Press 'm' to toggle autonomous mode, 'p' to enable gentle perturbations")
+print("Autonomous movement patterns:", ", ".join(movement_patterns))
 print("================")
 
 while 1:
@@ -145,7 +192,12 @@ while 1:
     if ord('d') in keys:
       basepos = basepos = [basepos[0], basepos[1] + shift, basepos[2]]
     
-    # Perturbation controls
+    # Mode and perturbation controls
+    if ord('m') in keys:
+      autonomous_mode = not autonomous_mode
+      print(f"Switched to {'AUTONOMOUS' if autonomous_mode else 'MANUAL'} mode")
+      if not autonomous_mode:
+        wheelVelocities = [0, 0, 0, 0]  # Stop when switching to manual
     if ord('p') in keys:
       enable_perturbations = not enable_perturbations
       print(f"Perturbations {'enabled' if enable_perturbations else 'disabled'}")
@@ -167,19 +219,88 @@ while 1:
     if ord('6') in keys:
       perturbation_magnitude_ang = min(0.2, perturbation_magnitude_ang + 0.01)
       print(f"Angular perturbation magnitude: {perturbation_magnitude_ang:.3f}")
+    if ord('7') in keys:
+      base_damping = max(0.1, base_damping - 0.1)
+      angular_damping = max(0.1, angular_damping - 0.1)
+      p.changeDynamics(husky, -1, linearDamping=base_damping, angularDamping=angular_damping)
+      print(f"Damping decreased: linear={base_damping:.1f}, angular={angular_damping:.1f}")
+    if ord('8') in keys:
+      base_damping = min(2.0, base_damping + 0.1)
+      angular_damping = min(2.0, angular_damping + 0.1)
+      p.changeDynamics(husky, -1, linearDamping=base_damping, angularDamping=angular_damping)
+      print(f"Damping increased: linear={base_damping:.1f}, angular={angular_damping:.1f}")
+    if ord('9') in keys:
+      autonomous_speed = max(0.1, autonomous_speed - 0.1)
+      print(f"Autonomous speed: {autonomous_speed:.1f}")
+    if ord('0') in keys:
+      autonomous_speed = min(2.0, autonomous_speed + 0.1)
+      print(f"Autonomous speed: {autonomous_speed:.1f}")
+    if ord('i') in keys:
+      show_imu_data = not show_imu_data
+      print(f"IMU data display: {'ON' if show_imu_data else 'OFF'}")
+    if ord('u') in keys:
+      enable_imu = not enable_imu
+      print(f"IMU sensor: {'ENABLED' if enable_imu else 'DISABLED'}")
 
-    if p.B3G_LEFT_ARROW in keys:
+    # Manual control (only active when not in autonomous mode)
+    if not autonomous_mode:
+      if p.B3G_LEFT_ARROW in keys:
+        for i in range(len(wheels)):
+          wheelVelocities[i] = wheelVelocities[i] - speed * wheelDeltasTurn[i]
+      if p.B3G_RIGHT_ARROW in keys:
+        for i in range(len(wheels)):
+          wheelVelocities[i] = wheelVelocities[i] + speed * wheelDeltasTurn[i]
+      if p.B3G_UP_ARROW in keys:
+        for i in range(len(wheels)):
+          wheelVelocities[i] = wheelVelocities[i] + speed * wheelDeltasFwd[i]
+      if p.B3G_DOWN_ARROW in keys:
+        for i in range(len(wheels)):
+          wheelVelocities[i] = wheelVelocities[i] - speed * wheelDeltasFwd[i]
+
+  # Autonomous movement logic
+  if autonomous_mode:
+    # Update movement duration and potentially change pattern
+    movement_duration += 1
+    
+    # Randomly change movement pattern
+    if (random.random() < movement_change_frequency or 
+        movement_duration > max_movement_duration):
+      current_movement_pattern = random.randint(0, len(movement_patterns) - 1)
+      movement_duration = 0
+      figure_eight_phase = 0  # Reset phase for figure-8
+      print(f"Autonomous movement: {movement_patterns[current_movement_pattern]}")
+    
+    # Execute current movement pattern
+    pattern = movement_patterns[current_movement_pattern]
+    
+    if pattern == "stop":
+      wheelVelocities = [0, 0, 0, 0]
+    elif pattern == "forward":
       for i in range(len(wheels)):
-        wheelVelocities[i] = wheelVelocities[i] - speed * wheelDeltasTurn[i]
-    if p.B3G_RIGHT_ARROW in keys:
+        wheelVelocities[i] = autonomous_speed * wheelDeltasFwd[i]
+    elif pattern == "backward":
       for i in range(len(wheels)):
-        wheelVelocities[i] = wheelVelocities[i] + speed * wheelDeltasTurn[i]
-    if p.B3G_UP_ARROW in keys:
+        wheelVelocities[i] = -autonomous_speed * wheelDeltasFwd[i]
+    elif pattern == "turn_left":
       for i in range(len(wheels)):
-        wheelVelocities[i] = wheelVelocities[i] + speed * wheelDeltasFwd[i]
-    if p.B3G_DOWN_ARROW in keys:
+        wheelVelocities[i] = -autonomous_speed * wheelDeltasTurn[i]
+    elif pattern == "turn_right":
       for i in range(len(wheels)):
-        wheelVelocities[i] = wheelVelocities[i] - speed * wheelDeltasFwd[i]
+        wheelVelocities[i] = autonomous_speed * wheelDeltasTurn[i]
+    elif pattern == "circle_left":
+      # Gentle forward + left turn
+      for i in range(len(wheels)):
+        wheelVelocities[i] = autonomous_speed * (0.8 * wheelDeltasFwd[i] - 0.2 * wheelDeltasTurn[i])
+    elif pattern == "circle_right":
+      # Gentle forward + right turn
+      for i in range(len(wheels)):
+        wheelVelocities[i] = autonomous_speed * (0.8 * wheelDeltasFwd[i] + 0.2 * wheelDeltasTurn[i])
+    elif pattern == "figure_eight":
+      # Gentler figure-8 pattern
+      figure_eight_phase += 0.01  # Slower phase change
+      turn_amount = math.sin(figure_eight_phase) * 0.2  # Smaller turning radius
+      for i in range(len(wheels)):
+        wheelVelocities[i] = autonomous_speed * (0.8 * wheelDeltasFwd[i] + turn_amount * wheelDeltasTurn[i])
 
   baseorn = p.getQuaternionFromEuler([0, 0, ang])
   for i in range(len(wheels)):
@@ -189,35 +310,133 @@ while 1:
                             targetVelocity=wheelVelocities[i],
                             force=1000)
   
-  # Apply random perturbations to the base
-  if enable_perturbations and random.random() < perturbation_frequency:
-    # Generate random perturbations
-    base_perturbation = [
-      random.uniform(-perturbation_magnitude_pos, perturbation_magnitude_pos),
-      random.uniform(-perturbation_magnitude_pos, perturbation_magnitude_pos),
-      0  # Keep Z stable to avoid dropping the robot
-    ]
-    ang_perturbation = random.uniform(-perturbation_magnitude_ang, perturbation_magnitude_ang)
-    
-    # Apply perturbation to the Husky base
+  # IMU Sensor Reading
+  if enable_imu:
+    # Get current position and orientation
     current_pos, current_orn = p.getBasePositionAndOrientation(husky)
-    perturbed_pos = [
-      current_pos[0] + base_perturbation[0],
-      current_pos[1] + base_perturbation[1],
-      current_pos[2] + base_perturbation[2]
+    current_vel, current_ang_vel = p.getBaseVelocity(husky)
+    
+    # Add realistic sensor noise
+    def add_noise(value_list, noise_level):
+      return [v + random.gauss(0, noise_level) for v in value_list]
+    
+    # Calculate acceleration (change in velocity)
+    dt = 1.0 / imu_sample_rate
+    linear_acceleration = [(current_vel[i] - previous_velocity[i]) / dt for i in range(3)]
+    angular_acceleration = [(current_ang_vel[i] - previous_angular_velocity[i]) / dt for i in range(3)]
+    
+    # Add noise to simulate realistic IMU
+    noisy_linear_accel = add_noise(linear_acceleration, imu_noise_level * 10)  # Accelerometer noise
+    noisy_angular_vel = add_noise(current_ang_vel, imu_noise_level)           # Gyroscope noise
+    noisy_orientation = add_noise(p.getEulerFromQuaternion(current_orn), imu_noise_level * 0.1)  # Magnetometer/orientation
+    
+    # Store IMU data
+    imu_reading = {
+      'timestamp': t,
+      'linear_acceleration': noisy_linear_accel,
+      'angular_velocity': noisy_angular_vel,
+      'orientation': noisy_orientation,
+      'raw_linear_accel': linear_acceleration,
+      'raw_angular_vel': current_ang_vel,
+      'raw_orientation': p.getEulerFromQuaternion(current_orn)
+    }
+    
+    # Maintain IMU history for filtering
+    imu_data_history.append(imu_reading)
+    if len(imu_data_history) > max_imu_history:
+      imu_data_history.pop(0)
+    
+    # Display IMU data if requested
+    if show_imu_data and int(t * 60) % 180 == 0:  # Every 3 seconds
+      print(f"IMU Data - Time: {t:.2f}s")
+      print(f"  Linear Accel: [{noisy_linear_accel[0]:.3f}, {noisy_linear_accel[1]:.3f}, {noisy_linear_accel[2]:.3f}] m/s²")
+      print(f"  Angular Vel:  [{noisy_angular_vel[0]:.3f}, {noisy_angular_vel[1]:.3f}, {noisy_angular_vel[2]:.3f}] rad/s")
+      print(f"  Orientation:  [{noisy_orientation[0]:.3f}, {noisy_orientation[1]:.3f}, {noisy_orientation[2]:.3f}] rad")
+      
+      # Show magnitude of disturbances
+      accel_magnitude = math.sqrt(sum(a*a for a in noisy_linear_accel))
+      angular_magnitude = math.sqrt(sum(w*w for w in noisy_angular_vel))
+      print(f"  Disturbance Magnitudes - Linear: {accel_magnitude:.3f} m/s², Angular: {angular_magnitude:.3f} rad/s")
+    
+    # Update previous values for next iteration
+    previous_velocity = current_vel
+    previous_angular_velocity = current_ang_vel
+    
+    # Simple disturbance detection based on IMU readings
+    accel_magnitude = math.sqrt(sum(a*a for a in linear_acceleration))
+    angular_magnitude = math.sqrt(sum(w*w for w in current_ang_vel))
+    
+    # Thresholds for disturbance detection
+    accel_threshold = 2.0   # m/s²
+    angular_threshold = 1.0  # rad/s
+    
+    if accel_magnitude > accel_threshold or angular_magnitude > angular_threshold:
+      if show_imu_data:
+        print(f"*** DISTURBANCE DETECTED *** Accel: {accel_magnitude:.2f}, Angular: {angular_magnitude:.2f}")
+      
+      # Here you could add compensation logic, such as:
+      # - Adjusting manipulator control gains
+      # - Triggering replanning of trajectory
+      # - Activating stabilization control
+      
+    # Store current IMU reading in global variable for use by manipulator control
+    globals()['current_imu_data'] = imu_reading
+  
+  # Apply random perturbations to the base using forces (smooth movement)
+  if enable_perturbations and random.random() < perturbation_frequency:
+    # Generate random force perturbations
+    force_magnitude = perturbation_magnitude_pos * 1000  # Scale to force units
+    torque_magnitude = perturbation_magnitude_ang * 100  # Scale to torque units
+    
+    perturbation_force = [
+      random.uniform(-force_magnitude, force_magnitude),
+      random.uniform(-force_magnitude, force_magnitude),
+      0  # No vertical force to maintain stability
     ]
     
-    # Convert current orientation to Euler, add perturbation, convert back
-    current_euler = p.getEulerFromQuaternion(current_orn)
-    perturbed_euler = [
-      current_euler[0],
-      current_euler[1], 
-      current_euler[2] + ang_perturbation
+    perturbation_torque = [
+      0,  # No roll perturbation
+      0,  # No pitch perturbation
+      random.uniform(-torque_magnitude, torque_magnitude)  # Only yaw perturbation
     ]
-    perturbed_orn = p.getQuaternionFromEuler(perturbed_euler)
     
-    p.resetBasePositionAndOrientation(husky, perturbed_pos, perturbed_orn)
-    print(f"Applied perturbation: pos={base_perturbation}, ang={ang_perturbation:.3f}")
+    # Apply external forces and torques to the base
+    p.applyExternalForce(husky, -1, perturbation_force, [0, 0, 0], p.LINK_FRAME)
+    p.applyExternalTorque(husky, -1, perturbation_torque, p.LINK_FRAME)
+    
+    print(f"Applied force perturbation: force={perturbation_force}, torque={perturbation_torque}")
+  
+  # Add trail visualization for the robot base (optional)
+  if autonomous_mode and int(t * 60) % 10 == 0:  # Every 10 frames in autonomous mode
+    base_pos, _ = p.getBasePositionAndOrientation(husky)
+    if 'prev_base_pos' in globals():
+      p.addUserDebugLine(prev_base_pos, base_pos, [0, 1, 0], 2, 10)  # Green trail for base
+    prev_base_pos = base_pos
+  
+  # IMU visualization - show acceleration vectors
+  if enable_imu and show_imu_data and 'current_imu_data' in globals() and int(t * 60) % 20 == 0:
+    imu = globals()['current_imu_data']
+    base_pos, _ = p.getBasePositionAndOrientation(husky)
+    
+    # Scale factors for visualization
+    accel_scale = 0.1
+    angular_scale = 0.05
+    
+    # Linear acceleration vector (red)
+    accel_end = [
+      base_pos[0] + imu['linear_acceleration'][0] * accel_scale,
+      base_pos[1] + imu['linear_acceleration'][1] * accel_scale,
+      base_pos[2] + 0.5 + imu['linear_acceleration'][2] * accel_scale
+    ]
+    p.addUserDebugLine(base_pos, accel_end, [1, 0, 0], 3, 1)  # Red arrow for acceleration
+    
+    # Angular velocity vector (blue)
+    angular_end = [
+      base_pos[0] + imu['angular_velocity'][0] * angular_scale,
+      base_pos[1] + imu['angular_velocity'][1] * angular_scale,
+      base_pos[2] + 0.8 + imu['angular_velocity'][2] * angular_scale
+    ]
+    p.addUserDebugLine([base_pos[0], base_pos[1], base_pos[2] + 0.3], angular_end, [0, 0, 1], 3, 1)  # Blue arrow for angular velocity
   
   #p.resetBasePositionAndOrientation(kukaId,basepos,baseorn)#[0,0,0,1])
   if (useRealTimeSimulation):
@@ -228,10 +447,41 @@ while 1:
 
   if (useSimulation and useRealTimeSimulation == 0):
     p.stepSimulation()
+    
+  # Display status every 300 frames (about every 5 seconds at 60fps)
+  if int(t * 300) % 300 == 0 and autonomous_mode:
+    print(f"Status - Mode: AUTONOMOUS, Pattern: {movement_patterns[current_movement_pattern]}, "
+          f"Duration: {movement_duration}/{max_movement_duration}, Speed: {autonomous_speed:.1f}")
 
   for i in range(1):
     #pos = [-0.4,0.2*math.cos(t),0.+0.2*math.sin(t)]
-    pos = [0.2 * math.cos(t), 0, 0. + 0.2 * math.sin(t) + 0.7]
+    base_pos = [0.2 * math.cos(t), 0, 0. + 0.2 * math.sin(t) + 0.7]
+    
+    # IMU-based trajectory compensation (if IMU is enabled and data is available)
+    if enable_imu and 'current_imu_data' in globals():
+      imu = globals()['current_imu_data']
+      
+      # Simple predictive compensation based on base acceleration
+      # Predict where the base will be in the next timestep
+      compensation_factor = 0.02  # Much smaller compensation factor
+      
+      accel_compensation = [
+        -imu['linear_acceleration'][0] * compensation_factor,
+        -imu['linear_acceleration'][1] * compensation_factor,
+        -imu['linear_acceleration'][2] * compensation_factor * 0.1  # Less Z compensation
+      ]
+      
+      pos = [
+        base_pos[0] + accel_compensation[0],
+        base_pos[1] + accel_compensation[1], 
+        base_pos[2] + accel_compensation[2]
+      ]
+      
+      if show_imu_data and int(t * 60) % 60 == 0:  # Every second
+        print(f"IMU Compensation: [{accel_compensation[0]:.4f}, {accel_compensation[1]:.4f}, {accel_compensation[2]:.4f}]")
+    else:
+      pos = base_pos
+    
     #end effector points down, not up (in case useOrientation==1)
     orn = p.getQuaternionFromEuler([0, -math.pi, 0])
 
