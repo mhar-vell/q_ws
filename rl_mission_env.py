@@ -264,7 +264,16 @@ class DQNAgent:
                 x = torch.relu(self.fc2(x))
                 return self.fc3(x)
         
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Device selection: CUDA (NVIDIA) > MPS (Apple) > CPU
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+        else:
+            self.device = torch.device("cpu")
+        
+        print(f"🔧 DQN Agent using device: {self.device}")
+        
         self.q_network = QNetwork(state_dim, action_dim).to(self.device)
         self.target_network = QNetwork(state_dim, action_dim).to(self.device)
         self.target_network.load_state_dict(self.q_network.state_dict())
