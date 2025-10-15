@@ -606,10 +606,23 @@ class DisturbanceManager:
             "jerk": "Jerk motion disturbances (enhanced rotational torques)"
         }
         
+        # Intensity control system
+        self.intensity_mode = "normal"  # Default intensity
+        self.golden_ratio = 1.61803    # φ (phi) - Golden ratio multiplier
+        self.intensity_modes = {
+            "normal": {"factor": 1.0, "description": "Standard disturbance forces"},
+            "golden": {"factor": 1.61803, "description": "Golden ratio intensified forces (φ × normal)"}
+        }
+        
         print("🎯 Disturbance Manager initialized with 5 scenarios:")
         for name, info in self.scenarios.items():
             status = "ACTIVE" if info["active"] else "DISABLED"
             print(f"   {name.upper():>12}: {info['description']} [{status}]")
+        
+        print(f"\n⚡ Intensity Control System:")
+        print(f"   NORMAL: 1.0x forces (standard)")
+        print(f"   GOLDEN: {self.golden_ratio}x forces (φ = Golden Ratio)")
+        print(f"   Current: {self.intensity_mode.upper()} mode")
     
     def apply_none_disturbance(self):
         """Scenario 1: No disturbances - clean baseline"""
@@ -617,7 +630,13 @@ class DisturbanceManager:
         return {"force": [0, 0, 0], "torque": [0, 0, 0], "applied": False}
     
     def _generate_directional_disturbance(self, base_force, base_torque, z_force, yaw_torque):
-        """Generate force and torque based on current directional mode"""
+        """Generate force and torque based on current directional mode and intensity"""
+        # Apply intensity factor to all force parameters
+        intensity_factor = self.intensity_modes[self.intensity_mode]["factor"]
+        base_force *= intensity_factor
+        base_torque *= intensity_factor
+        z_force *= intensity_factor
+        yaw_torque *= intensity_factor
         if self.directional_mode == "random":
             # Original random behavior
             force = [
@@ -787,11 +806,44 @@ class DisturbanceManager:
             print(f"❌ Unknown directional mode: {mode_name}")
             return False
     
+    def set_intensity_mode(self, mode_name):
+        """Set the intensity mode for disturbances"""
+        if mode_name in self.intensity_modes:
+            old_mode = self.intensity_mode
+            old_factor = self.intensity_modes[old_mode]["factor"]
+            self.intensity_mode = mode_name
+            factor = self.intensity_modes[mode_name]["factor"]
+            print(f"⚡ INTENSITY MODE CHANGED: {old_mode.upper()} → {mode_name.upper()}")
+            print(f"   Force multiplier: {old_factor}x → {factor}x")
+            print(f"   Description: {self.intensity_modes[mode_name]['description']}")
+            if mode_name == "golden":
+                print(f"   🌟 Golden ratio (φ = {self.golden_ratio}) applied to all forces!")
+                print(f"   📊 Example force changes:")
+                print(f"      • Random ±50N → ±{50 * factor:.1f}N")
+                print(f"      • Periodic ±100N → ±{100 * factor:.1f}N") 
+                print(f"      • Impulse ±200N → ±{200 * factor:.1f}N")
+            else:
+                print(f"   📊 Standard force levels restored")
+            
+            # Show current scenario status
+            if self.current_scenario != "none":
+                print(f"   ⚠️  Current scenario '{self.current_scenario.upper()}' will use new intensity!")
+                print(f"   📈 You should see immediate difference in force magnitude!")
+            else:
+                print(f"   💡 Switch to active scenario (2-5) to see intensity effects")
+                print(f"   🎯 Recommended: Press '2' for RANDOM scenario to see continuous forces")
+            return True
+        else:
+            print(f"❌ Unknown intensity mode: {mode_name}")
+            return False
+    
     def get_status(self):
         """Get current disturbance status"""
         return {
             "current_scenario": self.current_scenario,
             "directional_mode": self.directional_mode,
+            "intensity_mode": self.intensity_mode,
+            "intensity_factor": self.intensity_modes[self.intensity_mode]["factor"],
             "step_counter": self.step_counter,
             "impulse_applied": self.impulse_applied,
             "description": self.scenarios[self.current_scenario]["description"]
@@ -1211,6 +1263,11 @@ print("    '3' - PERIODIC scenario (impacts every 50 steps ±100N)")
 print("    '4' - CONTINUOUS scenario (persistent bias ±10N)")
 print("    '5' - IMPULSE scenario (single shock ±200N)")
 print("    'd' - Display current disturbance status")
+print("  DISTURBANCE DIRECTIONS:")
+print("    'N/F/G/U/J' - Direction modes (raNdom/Forward/lateral/Up/Jerk)")
+print("  DISTURBANCE INTENSITY:")
+print("    'O' - nOrmal intensity (1.0x forces)")
+print("    'W' - poWerful intensity (φ = 1.61803x forces - Golden ratio)")
 
 if RL_AVAILABLE:
     print("  RL TRAJECTORY PLANNER:")
@@ -1443,12 +1500,21 @@ while 1:
       # Switch to JERK directional mode
       disturbance_manager.set_directional_mode("jerk")
     
+    # === INTENSITY MODE CONTROLS ===
+    if ord('o') in keys:
+      # Switch to NORMAL intensity mode (O for nOrmal)
+      disturbance_manager.set_intensity_mode("normal")
+    if ord('w') in keys:
+      # Switch to GOLDEN intensity mode (W for poWerful/φ)  
+      disturbance_manager.set_intensity_mode("golden")
+    
     if ord('d') in keys:
       # Display current disturbance status and algorithm status
       status = disturbance_manager.get_status()
       print(f"\n🌪️  DISTURBANCE STATUS:")
       print(f"   Current Scenario: {status['current_scenario'].upper()}")
       print(f"   Directional Mode: {status['directional_mode'].upper()}")
+      print(f"   Intensity Mode: {status['intensity_mode'].upper()} ({status['intensity_factor']}x)")
       print(f"   Description: {status['description']}")
       print(f"   Step Counter: {status['step_counter']}")
       if status['current_scenario'] == 'impulse':
@@ -1457,6 +1523,8 @@ while 1:
       print(f"   Scenario Controls: Press 1-5 to switch scenarios")
       print(f"   Direction Controls: Press N/F/G/U/J for directional modes")
       print(f"     N=raNdom, F=Forward, G=lateral, U=Up/vertical, J=Jerk")
+      print(f"   Intensity Controls: Press O/W for intensity modes")
+      print(f"     O=nOrmal (1.0x), W=poWerful/Golden (φ = {disturbance_manager.golden_ratio}x)")
       
       # Display RL algorithm status if dual mode enabled
       if RL_AVAILABLE and TRAIN_BOTH_ALGORITHMS:
@@ -1812,8 +1880,12 @@ while 1:
       force = disturbance_result["force"]
       torque = disturbance_result["torque"]
       step = disturbance_manager.step_counter
+      intensity = disturbance_manager.intensity_mode.upper()
+      factor = disturbance_manager.intensity_modes[disturbance_manager.intensity_mode]["factor"]
       
-      print(f"🌪️  {scenario} disturbance applied (step {step}): F={force}, T={torque}")
+      # Show intensity in the force display
+      intensity_indicator = f"⚡{intensity}" if factor > 1.0 else f"📊{intensity}"
+      print(f"🌪️  {scenario} disturbance applied (step {step}) {intensity_indicator}: F=[{force[0]:.2f}, {force[1]:.2f}, {force[2]:.2f}], T=[{torque[0]:.2f}, {torque[1]:.2f}, {torque[2]:.2f}]")
 
   for i in range(1):
     # Manipulator trajectory centered on the circular path
