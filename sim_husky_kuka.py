@@ -601,7 +601,7 @@ class DisturbanceManager:
         self.directional_modes = {
             "random": "Random directions (current behavior)",
             "forward": "Forward/backward forces (X-axis dominant)",
-            "lateral": "Left/right forces (Y-axis dominant)", 
+            "lateral": "Going sideways forces (left/right Y-axis dominant)", 
             "vertical": "Up/down forces (Z-axis dominant)",
             "jerk": "Jerk motion disturbances (enhanced rotational torques)"
         }
@@ -1264,10 +1264,10 @@ print("    '4' - CONTINUOUS scenario (persistent bias ±10N)")
 print("    '5' - IMPULSE scenario (single shock ±200N)")
 print("    'd' - Display current disturbance status")
 print("  DISTURBANCE DIRECTIONS:")
-print("    'N/F/G/U/J' - Direction modes (raNdom/Forward/lateral/Up/Jerk)")
+print("    'N/F/G/U/J' - Direction modes (raNdom/Forward/Going sideways/Up/Jerk)")
 print("  DISTURBANCE INTENSITY:")
 print("    'O' - nOrmal intensity (1.0x forces)")
-print("    'W' - poWerful intensity (φ = 1.61803x forces - Golden ratio)")
+print("    'Y' - intensitY/Golden intensity (φ = 1.61803x forces - Golden ratio)")
 
 if RL_AVAILABLE:
     print("  RL TRAJECTORY PLANNER:")
@@ -1491,7 +1491,7 @@ while 1:
       # Switch to FORWARD directional mode
       disturbance_manager.set_directional_mode("forward")
     if ord('g') in keys:
-      # Switch to LATERAL directional mode (G for lateral movement)
+      # Switch to LATERAL directional mode (G for Going sideways)
       disturbance_manager.set_directional_mode("lateral")
     if ord('u') in keys:
       # Switch to VERTICAL directional mode (U for Up)
@@ -1504,8 +1504,8 @@ while 1:
     if ord('o') in keys:
       # Switch to NORMAL intensity mode (O for nOrmal)
       disturbance_manager.set_intensity_mode("normal")
-    if ord('w') in keys:
-      # Switch to GOLDEN intensity mode (W for poWerful/φ)  
+    if ord('y') in keys:
+      # Switch to GOLDEN intensity mode (Y for intensitY/φ)  
       disturbance_manager.set_intensity_mode("golden")
     
     if ord('d') in keys:
@@ -1522,9 +1522,9 @@ while 1:
         print(f"   Impulse Status: {impulse_status}")
       print(f"   Scenario Controls: Press 1-5 to switch scenarios")
       print(f"   Direction Controls: Press N/F/G/U/J for directional modes")
-      print(f"     N=raNdom, F=Forward, G=lateral, U=Up/vertical, J=Jerk")
-      print(f"   Intensity Controls: Press O/W for intensity modes")
-      print(f"     O=nOrmal (1.0x), W=poWerful/Golden (φ = {disturbance_manager.golden_ratio}x)")
+      print(f"     N=raNdom, F=Forward, G=Going sideways, U=Up/vertical, J=Jerk")
+      print(f"   Intensity Controls: Press O/Y for intensity modes")
+      print(f"     O=nOrmal (1.0x), Y=intensitY/Golden (φ = {disturbance_manager.golden_ratio}x)")
       
       # Display RL algorithm status if dual mode enabled
       if RL_AVAILABLE and TRAIN_BOTH_ALGORITHMS:
