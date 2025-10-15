@@ -9,6 +9,7 @@ import random
 import os
 from rl_mission_env import MobileManipulatorEnv, QLearningAgent
 import json
+from PIL import Image
 
 # Import RL Trajectory Planner
 try:
@@ -870,6 +871,123 @@ imu_frame_counter = 0
 video_recorder = VideoRecorder(output_dir="videos", fps=60, duration=30)
 print("Video recorder initialized - Use 'v' to start/stop recording")
 
+# === PHOTO MANAGER CLASS ===
+class PhotoManager:
+    """
+    Photo capture management for PyBullet simulations.
+    Organizes screenshots in a dedicated folder with proper naming.
+    """
+    
+    def __init__(self, output_dir="photos"):
+        """
+        Initialize photo manager.
+        
+        Args:
+            output_dir: Directory to save photos
+        """
+        self.output_dir = output_dir
+        self.photo_count = 0
+        self.session_id = int(time.time())  # Unique session identifier
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(self.output_dir, exist_ok=True)
+        
+        # Count existing photos to avoid conflicts
+        existing_photos = [f for f in os.listdir(self.output_dir) if f.endswith('.png')]
+        self.photo_count = len(existing_photos)
+        
+        print(f"PhotoManager initialized: {self.output_dir}/ ({self.photo_count} existing photos)")
+    
+    def capture_screenshot(self, filename_prefix="screenshot"):
+        """
+        Capture a screenshot of the current simulation view.
+        
+        Args:
+            filename_prefix: Prefix for the filename
+            
+        Returns:
+            str: Full path to saved screenshot, or None if failed
+        """
+        try:
+            # Get current camera view
+            width, height, rgb_img, depth_img, seg_img = p.getCameraImage(
+                width=1920,
+                height=1080,
+                renderer=p.ER_BULLET_HARDWARE_OPENGL
+            )
+            
+            # Convert to PIL Image
+            rgb_array = np.array(rgb_img).reshape(height, width, 4)
+            rgb_array = rgb_array[:, :, :3]  # Remove alpha channel
+            img = Image.fromarray(rgb_array, 'RGB')
+            
+            # Generate filename
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            filename = f"{filename_prefix}_{timestamp}_{self.photo_count:04d}.png"
+            filepath = os.path.join(self.output_dir, filename)
+            
+            # Save image
+            img.save(filepath)
+            self.photo_count += 1
+            
+            print(f"📸 Screenshot saved: {filename}")
+            return filepath
+            
+        except Exception as e:
+            print(f"⚠️  Failed to capture screenshot: {e}")
+            return None
+    
+    def capture_training_screenshot(self, scenario, episode, algorithm=""):
+        """
+        Capture screenshot during RL training with descriptive naming.
+        
+        Args:
+            scenario: Training scenario name
+            episode: Episode number
+            algorithm: Algorithm name (optional)
+        """
+        prefix = f"training_{algorithm}_{scenario}_ep{episode:03d}" if algorithm else f"training_{scenario}_ep{episode:03d}"
+        return self.capture_screenshot(prefix)
+    
+    def get_photo_count(self):
+        """Get current number of photos in the folder."""
+        return self.photo_count
+    
+    def cleanup_old_photos(self, keep_count=1000):
+        """
+        Remove old photos, keeping only the most recent ones.
+        
+        Args:
+            keep_count: Number of recent photos to keep
+        """
+        try:
+            photo_files = [f for f in os.listdir(self.output_dir) if f.endswith('.png')]
+            
+            if len(photo_files) <= keep_count:
+                return
+            
+            # Sort by modification time
+            photo_files.sort(key=lambda x: os.path.getmtime(os.path.join(self.output_dir, x)))
+            
+            # Remove oldest photos
+            files_to_remove = photo_files[:-keep_count]
+            removed_count = 0
+            
+            for filename in files_to_remove:
+                filepath = os.path.join(self.output_dir, filename)
+                os.remove(filepath)
+                removed_count += 1
+            
+            print(f"🗑️  Cleaned up {removed_count} old photos (keeping {keep_count} most recent)")
+            self.photo_count = keep_count
+            
+        except Exception as e:
+            print(f"⚠️  Failed to cleanup photos: {e}")
+
+# === INITIALIZE PHOTO MANAGER ===
+photo_manager = PhotoManager(output_dir="photos")
+print("Photo manager initialized - Use 'p' to capture screenshots")
+
 # === INITIALIZE RL TRAJECTORY PLANNER ===
 rl_planner = None
 rl_training_mode = False
@@ -951,13 +1069,35 @@ rl_scenarios = [
   'continuous',
   'impulse'
 ]
-rl_metrics = {scenario: {'success': 0, 'errors': [], 'steps': [], 'energy': [], 'episodes': 0} for scenario in rl_scenarios}
+
+# Enhanced training with intensity levels
+rl_intensity_levels = ['normal', 'golden']
+rl_use_dual_intensity = True  # Set to False to use only normal intensity
+
+# Create comprehensive scenario-intensity combinations
+if rl_use_dual_intensity:
+    rl_training_combinations = []
+    for scenario in rl_scenarios:
+        for intensity in rl_intensity_levels:
+            rl_training_combinations.append({'scenario': scenario, 'intensity': intensity})
+    print(f"🎯 Dual-Intensity Training: {len(rl_training_combinations)} combinations")
+else:
+    rl_training_combinations = [{'scenario': s, 'intensity': 'normal'} for s in rl_scenarios]
+    print(f"🎯 Standard Training: {len(rl_training_combinations)} scenarios")
+
+# Metrics tracking for scenario-intensity combinations
+rl_metrics = {}
+for combo in rl_training_combinations:
+    key = f"{combo['scenario']}_{combo['intensity']}"
+    rl_metrics[key] = {'success': 0, 'errors': [], 'steps': [], 'energy': [], 'episodes': 0}
 
 # Dual algorithm metrics tracking
 if TRAIN_BOTH_ALGORITHMS:
+    # Create combination keys for metrics tracking
+    combo_keys = [f"{combo['scenario']}_{combo['intensity']}" for combo in rl_training_combinations]
     rl_algorithm_metrics = {
-        'DQN': {scenario: {'success': 0, 'errors': [], 'steps': [], 'energy': [], 'episodes': 0} for scenario in rl_scenarios},
-        'Q-Learning': {scenario: {'success': 0, 'errors': [], 'steps': [], 'energy': [], 'episodes': 0} for scenario in rl_scenarios}
+        'DQN': {combo_key: {'success': 0, 'errors': [], 'steps': [], 'energy': [], 'episodes': 0} for combo_key in combo_keys},
+        'Q-Learning': {combo_key: {'success': 0, 'errors': [], 'steps': [], 'energy': [], 'episodes': 0} for combo_key in combo_keys}
     }
     rl_algorithm_comparison = {'DQN': {'total_reward': 0, 'training_time': 0, 'completed': False}, 'Q-Learning': {'total_reward': 0, 'training_time': 0, 'completed': False}}
     rl_sequential_training_status = {'first_algorithm_completed': False, 'both_completed': False}
@@ -976,7 +1116,7 @@ rl_max_steps = 200         # Max steps per episode before timeout
 rl_episode_counter = 0
 rl_step_counter = 0
 rl_state = None
-rl_current_scenario_idx = 0
+rl_current_combination_idx = 0
 rl_current_episode = 0
 
 # Note: RL training disabled on startup to allow interactive simulation
@@ -989,25 +1129,26 @@ if TRAIN_BOTH_ALGORITHMS:
     print(f"Algorithm Switching: Press 'k' to switch (when not training)")
 else:
     print(f"RL Algorithm: {rl_agent.agent_type}")
-print(f"Training scenarios: {rl_scenarios}")
-print(f"Episodes per scenario: {rl_num_episodes}")
+print(f"Training combinations: {len(rl_training_combinations)} (5 scenarios × 2 intensities)")
+print(f"Episodes per combination: {rl_num_episodes}")
 if TRAIN_BOTH_ALGORITHMS:
-    print(f"Episodes per algorithm: {rl_num_episodes * len(rl_scenarios)}")
-    print(f"Total episodes (both algorithms): {rl_num_episodes * len(rl_scenarios) * 2}")
-    print(f"Estimated time per algorithm: ~{(rl_num_episodes * len(rl_scenarios) * 0.5 / 60):.1f} minutes")
-    print(f"Total estimated time (both): ~{(rl_num_episodes * len(rl_scenarios) * 2 * 0.5 / 60):.1f} minutes")
+    print(f"Episodes per algorithm: {rl_num_episodes * len(rl_training_combinations)}")
+    print(f"Total episodes (both algorithms): {rl_num_episodes * len(rl_training_combinations) * 2}")
+    print(f"Estimated time per algorithm: ~{(rl_num_episodes * len(rl_training_combinations) * 0.5 / 60):.1f} minutes")
+    print(f"Total estimated time (both): ~{(rl_num_episodes * len(rl_training_combinations) * 2 * 0.5 / 60):.1f} minutes")
 else:
-    print(f"Total episodes (all scenarios): {rl_num_episodes * len(rl_scenarios)}")
-    print(f"Estimated training time: ~{(rl_num_episodes * len(rl_scenarios) * 0.5 / 60):.1f} minutes")
+    print(f"Total episodes (all combinations): {rl_num_episodes * len(rl_training_combinations)}")
+    print(f"Estimated training time: ~{(rl_num_episodes * len(rl_training_combinations) * 0.5 / 60):.1f} minutes")
 print(f"Max steps per episode: {rl_max_steps}")
 
 if TRAIN_BOTH_ALGORITHMS:
-    print(f"\n📋 Sequential Training Workflow:")
+    print(f"\n📋 Automatic Sequential Training Workflow:")
     print(f"  1. Train {rl_current_algorithm} completely (press 't' to start)")
-    print(f"  2. After completion, switch algorithm (press 'k')")
-    print(f"  3. Train the second algorithm completely")
+    print(f"  2. 🔄 AUTOMATIC switch to {'Q-Learning' if rl_current_algorithm == 'DQN' else 'DQN'}")
+    print(f"  3. Train the second algorithm completely (automatic)")
     print(f"  4. Compare performance results")
     print(f"  5. Use 'd' key to check training status anytime")
+    print(f"  💡 No manual intervention required - fully automated!")
 print("\nAlgorithm Comparison:")
 print("  📊 Tabular Q-Learning:")
 print("     • Simple, interpretable, fast updates")
@@ -1254,6 +1395,7 @@ print("  'r' - Reset to start position")
 print("  'i' - Display immediate IMU readings")
 print("  'p' - Apply manual perturbation (test IMU response)")
 print("  'v' - Start/stop video recording (30s max)")
+print("  'p' - Capture screenshot (organized in photos/ folder)")
 print("  'c' - Change camera angle (when not recording)")
 print("  'x' - Quick test recording (10 seconds)")
 print("  DISTURBANCE SCENARIOS:")
@@ -1282,7 +1424,8 @@ print("  Arrow keys - Manual control (when autonomous off)")
 print("")
 print("FEATURES:")
 print("  📹 VIDEO RECORDING - Records simulation as MP4 video")
-print("  📊 IMU SENSORS - Accelerometer with realistic noise and bias")
+print("  � PHOTO CAPTURE - Organized screenshots in photos/ folder")
+print("  �📊 IMU SENSORS - Accelerometer with realistic noise and bias")
 print("  🎮 IMU CONTROL - Gyroscope with drift simulation") 
 print("  🎯 AUTO STABILITY - Disturbance rejection using IMU feedback")
 print("  �️  DISTURBANCE SIM - 5 systematic disturbance scenarios for testing")
@@ -1291,7 +1434,7 @@ if RL_AVAILABLE:
     print("  🤖 RL TRAJECTORY PLANNER:")
     if TRAIN_BOTH_ALGORITHMS:
         print("    • DUAL ALGORITHM MODE: DQN + Tabular Q-Learning")
-        print("    • Press 'k' to switch algorithms during training")
+        print("    • 🔄 AUTOMATIC sequential training (no manual switching)")
         print("    • Automatic performance comparison and metrics")
     else:
         print("    • Q-learning & Deep Q-Networks (DQN) for adaptive control")
@@ -1384,6 +1527,12 @@ while 1:
         video_recorder.stop_recording()
       else:
         video_recorder.start_recording()
+    if ord('p') in keys:
+      # Capture screenshot
+      print("📸 'p' key detected!")  # Debug: confirm key press
+      scenario_info = f"{disturbance_manager.current_scenario}_{disturbance_manager.intensity_mode}" if hasattr(disturbance_manager, 'current_scenario') else "simulation"
+      filename_prefix = f"manual_{scenario_info}"
+      photo_manager.capture_screenshot(filename_prefix)
     if ord('c') in keys:
       # Change camera angle for recording
       if not video_recorder.is_recording:
@@ -1535,15 +1684,22 @@ while 1:
         qlearn_status = "✅ COMPLETED" if rl_algorithm_comparison['Q-Learning']['completed'] else "⏳ PENDING"
         print(f"   DQN Training: {dqn_status}")
         print(f"   Q-Learning Training: {qlearn_status}")
-        print(f"   Algorithm Controls: Press 'k' to switch algorithms (when not training)")
+        print(f"   Algorithm Switching: 🔄 AUTOMATIC (seamless transition)")
         if not rl_algorithm_comparison['DQN']['completed'] and not rl_algorithm_comparison['Q-Learning']['completed']:
-          print(f"   💡 Recommendation: Complete {rl_current_algorithm} training first, then switch")
+          print(f"   💡 Sequential Training: {rl_current_algorithm} → {'Q-Learning' if rl_current_algorithm == 'DQN' else 'DQN'} (automatic)")
         elif rl_algorithm_comparison['DQN']['completed'] and not rl_algorithm_comparison['Q-Learning']['completed']:
-          print(f"   💡 Next: Switch to Q-Learning (press 'k') and train")
+          print(f"   💡 Status: DQN completed, Q-Learning will start automatically")
         elif not rl_algorithm_comparison['DQN']['completed'] and rl_algorithm_comparison['Q-Learning']['completed']:
-          print(f"   💡 Next: Switch to DQN (press 'k') and train")
+          print(f"   💡 Status: Q-Learning completed, DQN will start automatically")
         else:
           print(f"   🎉 Both algorithms completed! Compare results with analysis tools.")
+      
+      # Display photo management status
+      print(f"\n📸 PHOTO STATUS:")
+      print(f"   Total Photos: {photo_manager.get_photo_count()}")
+      print(f"   Storage Location: {photo_manager.output_dir}/")
+      if photo_manager.get_photo_count() > 500:
+        print(f"   ⚠️  Consider cleanup: {photo_manager.get_photo_count()} photos (press Ctrl+C and run photo_manager.cleanup_old_photos())")
 
     # Manual control (only when autonomous mode is disabled)
     if not autonomous_mode:
@@ -1562,14 +1718,23 @@ while 1:
 
   # === RL TRAINING IN MAIN LOOP ===
   # Run RL training step-by-step within the simulation
-  if rl_training_mode and rl_current_scenario_idx < len(rl_scenarios):
-    scenario = rl_scenarios[rl_current_scenario_idx]
+  if rl_training_mode and rl_current_combination_idx < len(rl_training_combinations):
+    current_combo = rl_training_combinations[rl_current_combination_idx]
+    scenario = current_combo['scenario']
+    intensity = current_combo['intensity']
     
     # Initialize episode if needed
     if rl_step_counter == 0:
       rl_state = rl_env.reset()
       rl_env.current_disturbance = scenario
-      print(f"\n[RL][{scenario}] Starting Episode {rl_current_episode + 1}/{rl_num_episodes}")
+      # Synchronize disturbance manager with RL training scenario and intensity
+      disturbance_manager.set_scenario(scenario)
+      disturbance_manager.set_intensity_mode(intensity)
+      
+      intensity_symbol = "⚡" if intensity == "golden" else "📊"
+      intensity_factor = disturbance_manager.intensity_modes[intensity]["factor"]
+      print(f"\n[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} ({intensity_factor}x) - Episode {rl_current_episode + 1}/{rl_num_episodes}")
+      print(f"🌪️  Scenario: {scenario.upper()} | Intensity: {intensity.upper()} | Combination {rl_current_combination_idx + 1}/{len(rl_training_combinations)}")
     
     # Execute one RL step per simulation frame
     rl_action = rl_agent.select_action(rl_state)
@@ -1578,31 +1743,37 @@ while 1:
     rl_state = rl_next_state
     rl_step_counter += 1
     
-    # Track energy
-    ep_energy = rl_metrics[scenario].get('current_energy', 0)
+    # Track energy (use combined scenario-intensity key)
+    combo_key = f"{scenario}_{intensity}"
+    ep_energy = rl_metrics[combo_key].get('current_energy', 0)
     if rl_action >= rl_env.p.getNumJoints(rl_env.kuka):
       ep_energy += 1.0
-    rl_metrics[scenario]['current_energy'] = ep_energy
+    rl_metrics[combo_key]['current_energy'] = ep_energy
     
     # Check episode completion
     if rl_done or rl_step_counter >= rl_max_steps:
       final_error = np.linalg.norm(rl_state[-4:-1] - rl_env.goal_pose[:3])
       
       if rl_done:
-        rl_metrics[scenario]['success'] += 1
-        print(f"[RL][{scenario}] Episode {rl_current_episode + 1} SUCCESS: steps={rl_step_counter}, error={final_error:.3f}, energy={ep_energy}")
+        rl_metrics[combo_key]['success'] += 1
+        print(f"[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} Episode {rl_current_episode + 1} SUCCESS: steps={rl_step_counter}, error={final_error:.3f}, energy={ep_energy}")
+        
+        # Capture screenshot for successful episodes (every 10th success)
+        success_count = rl_metrics[combo_key]['success']
+        if success_count % 10 == 0:  # Only capture every 10th success to avoid too many photos
+          photo_manager.capture_training_screenshot(scenario, rl_current_episode + 1, rl_current_algorithm)
       else:
-        print(f"[RL][{scenario}] Episode {rl_current_episode + 1} TIMEOUT: steps={rl_step_counter}, error={final_error:.3f}, energy={ep_energy}")
+        print(f"[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} Episode {rl_current_episode + 1} TIMEOUT: steps={rl_step_counter}, error={final_error:.3f}, energy={ep_energy}")
       
-      rl_metrics[scenario]['errors'].append(final_error)
-      rl_metrics[scenario]['steps'].append(rl_step_counter)
-      rl_metrics[scenario]['energy'].append(ep_energy)
-      rl_metrics[scenario]['episodes'] += 1
+      rl_metrics[combo_key]['errors'].append(final_error)
+      rl_metrics[combo_key]['steps'].append(rl_step_counter)
+      rl_metrics[combo_key]['energy'].append(ep_energy)
+      rl_metrics[combo_key]['episodes'] += 1
       
       # Reset for next episode
       rl_step_counter = 0
       rl_current_episode += 1
-      rl_metrics[scenario]['current_energy'] = 0
+      rl_metrics[combo_key]['current_energy'] = 0
       
       # Save checkpoint every 100 episodes
       if rl_current_episode % 100 == 0 and rl_current_episode > 0:
@@ -1612,46 +1783,128 @@ while 1:
         except Exception as e:
           print(f"⚠️  Failed to save checkpoint: {e}")
       
-      # Check if scenario is complete
+      # Check if current combination is complete
       if rl_current_episode >= rl_num_episodes:
-        print(f"\n=== Scenario '{scenario}' Complete ===")
-        m = rl_metrics[scenario]
+        print(f"\n=== Combination '{scenario.upper()}_{intensity.upper()}' Complete ===")
+        m = rl_metrics[combo_key]
         success_rate = 100.0 * m['success'] / m['episodes']
         avg_error = np.mean(m['errors'])
         avg_steps = np.mean(m['steps'])
         avg_energy = np.mean(m['energy'])
         print(f"Success Rate: {success_rate:5.1f}% | Avg Error: {avg_error:6.3f} | Avg Steps: {avg_steps:5.1f} | Avg Energy: {avg_energy:5.1f}\n")
         
-        # Save final model for this scenario
+        # Save final model for this combination
         try:
-          rl_agent.save(f'rl_final_{scenario}')
-          print(f"💾 Final model saved for scenario '{scenario}'")
+          rl_agent.save(f'rl_final_{scenario}_{intensity}')
+          print(f"💾 Final model saved for combination '{scenario}_{intensity}'")
         except Exception as e:
           print(f"⚠️  Failed to save final model: {e}")
         
-        # Move to next scenario
-        rl_current_scenario_idx += 1
+        # Move to next combination
+        rl_current_combination_idx += 1
         rl_current_episode = 0
         
-        # Check if all scenarios complete
-        if rl_current_scenario_idx >= len(rl_scenarios):
-          print("\n=== RL Training Complete - All Scenarios ===")
-          for s in rl_scenarios:
-            m = rl_metrics[s]
-            success_rate = 100.0 * m['success'] / m['episodes']
-            avg_error = np.mean(m['errors'])
-            avg_steps = np.mean(m['steps'])
-            avg_energy = np.mean(m['energy'])
-            print(f"{s:10s} | Success: {success_rate:5.1f}% | Error: {avg_error:6.3f} | Steps: {avg_steps:5.1f} | Energy: {avg_energy:5.1f}")
+        # Prepare next combination (if available)
+        if rl_current_combination_idx < len(rl_training_combinations):
+          next_combo = rl_training_combinations[rl_current_combination_idx]
+          next_scenario = next_combo['scenario']
+          next_intensity = next_combo['intensity']
+          next_symbol = "⚡" if next_intensity == "golden" else "📊"
+          print(f"\n🔄 ADVANCING TO NEXT COMBINATION: {next_scenario.upper()}_{next_intensity.upper()}")
+          print(f"   {next_symbol} Next: {next_scenario.upper()} scenario with {next_intensity.upper()} intensity")
+          print(f"   Episodes per combination: {rl_num_episodes}")
+          print(f"   Combinations remaining: {len(rl_training_combinations) - rl_current_combination_idx}")
+        
+        
+        # Check if all combinations complete for current algorithm
+        if rl_current_combination_idx >= len(rl_training_combinations):
+          print(f"\n=== {rl_current_algorithm} Training Complete - All Combinations ===")
+          for combo in rl_training_combinations:
+            combo_key = f"{combo['scenario']}_{combo['intensity']}"
+            symbol = "⚡" if combo['intensity'] == "golden" else "📊"
+            display_name = f"{symbol} {combo['scenario']}_{combo['intensity']}"
+            
+            if combo_key in rl_metrics:
+              m = rl_metrics[combo_key]
+              success_rate = 100.0 * m['success'] / m['episodes']
+              avg_error = np.mean(m['errors'])
+              avg_steps = np.mean(m['steps'])
+              avg_energy = np.mean(m['energy'])
+              print(f"{display_name:<15} | Success: {success_rate:5.1f}% | Error: {avg_error:6.3f} | Steps: {avg_steps:5.1f} | Energy: {avg_energy:5.1f}")
           
-          # Save metrics
-          with open('rl_metrics.json', 'w') as f:
+          # Save metrics for current algorithm
+          algorithm_metrics_file = f'rl_metrics_{rl_current_algorithm.lower()}.json'
+          with open(algorithm_metrics_file, 'w') as f:
             json.dump(rl_metrics, f, indent=2)
-          print('\n💾 RL metrics saved to rl_metrics.json')
+          print(f'\n💾 {rl_current_algorithm} metrics saved to {algorithm_metrics_file}')
           
-          # Disable training mode
-          rl_training_mode = False
-          print("🎓 RL Training Mode AUTO-DISABLED (all scenarios complete)\n")
+          # Mark current algorithm as completed
+          if TRAIN_BOTH_ALGORITHMS and rl_current_algorithm in rl_algorithm_comparison:
+            rl_algorithm_comparison[rl_current_algorithm]['completed'] = True
+            rl_algorithm_comparison[rl_current_algorithm]['training_time'] = time.time() - rl_start_time
+            
+            # Check if we need to switch to second algorithm automatically
+            if rl_current_algorithm == "DQN" and not rl_algorithm_comparison['Q-Learning']['completed']:
+              print(f"\n🔄 AUTOMATIC ALGORITHM SWITCH: DQN → Q-Learning")
+              print(f"   ✅ DQN completed all {len(rl_training_combinations)} combinations")
+              print(f"   🚀 Automatically starting Q-Learning training...")
+              
+              # Switch to Q-Learning
+              rl_agent = rl_agent_qlearn
+              rl_current_algorithm = "Q-Learning"
+              
+              # Reset training state for second algorithm
+              rl_current_combination_idx = 0
+              rl_current_episode = 0
+              rl_start_time = time.time()
+              
+              # Initialize fresh metrics for Q-Learning
+              rl_metrics = {}
+              for combo in rl_training_combinations:
+                combo_key = f"{combo['scenario']}_{combo['intensity']}"
+                rl_metrics[combo_key] = {'success': 0, 'errors': [], 'steps': [], 'energy': [], 'episodes': 0}
+              
+              print(f"   🎯 Q-Learning will now train through all {len(rl_training_combinations)} combinations")
+              print(f"   📊 Estimated additional time: ~{(rl_num_episodes * len(rl_training_combinations) * 0.5 / 60):.1f} minutes")
+              
+            elif rl_current_algorithm == "Q-Learning" and not rl_algorithm_comparison['DQN']['completed']:
+              print(f"\n🔄 AUTOMATIC ALGORITHM SWITCH: Q-Learning → DQN")
+              print(f"   ✅ Q-Learning completed all {len(rl_training_combinations)} combinations")
+              print(f"   🚀 Automatically starting DQN training...")
+              
+              # Switch to DQN
+              rl_agent = rl_agent_dqn
+              rl_current_algorithm = "DQN"
+              
+              # Reset training state for second algorithm
+              rl_current_combination_idx = 0
+              rl_current_episode = 0
+              rl_start_time = time.time()
+              
+              # Initialize fresh metrics for DQN
+              rl_metrics = {}
+              for combo in rl_training_combinations:
+                combo_key = f"{combo['scenario']}_{combo['intensity']}"
+                rl_metrics[combo_key] = {'success': 0, 'errors': [], 'steps': [], 'energy': [], 'episodes': 0}
+              
+              print(f"   🎯 DQN will now train through all {len(rl_training_combinations)} combinations")
+              print(f"   📊 Estimated additional time: ~{(rl_num_episodes * len(rl_training_combinations) * 0.5 / 60):.1f} minutes")
+              
+            else:
+              # Both algorithms completed - final completion
+              print(f"\n🎉 BOTH ALGORITHMS TRAINING COMPLETE! 🎉")
+              print(f"   ✅ DQN: {len(rl_training_combinations)} combinations completed")
+              print(f"   ✅ Q-Learning: {len(rl_training_combinations)} combinations completed")
+              print(f"   📊 Total episodes: {rl_num_episodes * len(rl_training_combinations) * 2}")
+              
+              # Disable training mode
+              rl_training_mode = False
+              rl_sequential_training_status['both_completed'] = True
+              print("🎓 RL Training Mode AUTO-DISABLED (both algorithms complete)\n")
+          else:
+            # Single algorithm mode - disable training
+            rl_training_mode = False
+            print("🎓 RL Training Mode AUTO-DISABLED (all combinations complete)\n")
   
   # === RL TRAJECTORY PLANNER CONTROL (if available) ===
   if RL_AVAILABLE and rl_planner is not None:
