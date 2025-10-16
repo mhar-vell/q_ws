@@ -34,13 +34,314 @@ class MobileManipulatorEnv:
         self.action_dim = 2 * num_kuka_joints + 1 + 3 + 1  # 14 + 1 + 3 + 1 = 19 actions
         self.disturbance_types = ['none', 'random', 'periodic', 'continuous', 'impulse']
         self.current_disturbance = 'none'
+        
+        # WAYPOINT TRAJECTORY TRACKING for circular path validation
+        self.trajectory_radius = 0.2  # Same as main simulation
+        self.trajectory_center = [0.0, 0.0]  # Will be updated dynamically
+        self.trajectory_z_base = 0.7  # Base height for trajectory
+        self.waypoints = []
+        self.waypoint_tolerance = 0.03  # 3cm tolerance for waypoint passage
+        self.current_waypoint_idx = 0
+        self.waypoints_passed = []
+        self.cycle_start_time = 0
+        self.completed_cycles = 0
+        self.cycle_accuracy_scores = []
+        
+        # TRAJECTORY ACCURACY TRACKING - Enhanced for episode-by-episode analysis
+        self.episode_count = 0
+        self.current_episode_trajectory = []  # Record actual training trajectory positions
+        self.current_episode_start_time = 0
+        self.ideal_trajectory_cache = {}  # Cache for ideal circular trajectory points
+        self.episode_accuracy_history = []  # Store accuracy for each episode
+        self.episode_statistics = {
+            'distance_errors': [],
+            'timing_errors': [],
+            'waypoint_passage_rates': [],
+            'cycle_completion_rates': [],
+            'trajectory_similarity_scores': []
+        }
+        
+        # Initialize timestep before reset
+        self.timestep = 0
+        self.done = False
+        
         self.reset()
 
     def update_goal(self, new_goal_pose):
         """Update the goal pose dynamically during training"""
         self.goal_pose = new_goal_pose
 
+    def generate_waypoints(self, center, num_waypoints=8):
+        """Generate waypoints around the circular trajectory"""
+        self.trajectory_center = [center[0], center[1]]
+        self.waypoints = []
+        
+        for i in range(num_waypoints):
+            angle = (2 * np.pi * i) / num_waypoints
+            waypoint = [
+                self.trajectory_center[0] + self.trajectory_radius * np.cos(angle),
+                self.trajectory_center[1] + self.trajectory_radius * np.sin(angle),
+                self.trajectory_z_base  # Fixed Z for waypoint checking
+            ]
+            self.waypoints.append(waypoint)
+        
+        self.current_waypoint_idx = 0
+        self.waypoints_passed = [False] * num_waypoints
+        print(f"🎯 Generated {num_waypoints} waypoints for circular trajectory validation")
+
+    def check_waypoint_passage(self, ee_pos):
+        """Check if end-effector has passed through the current waypoint"""
+        if not self.waypoints or self.current_waypoint_idx >= len(self.waypoints):
+            return False
+            
+        current_waypoint = self.waypoints[self.current_waypoint_idx]
+        distance = np.linalg.norm(np.array(ee_pos) - np.array(current_waypoint))
+        
+        if distance < self.waypoint_tolerance:
+            if not self.waypoints_passed[self.current_waypoint_idx]:
+                self.waypoints_passed[self.current_waypoint_idx] = True
+                print(f"✅ Waypoint {self.current_waypoint_idx + 1}/{len(self.waypoints)} passed! Distance: {distance:.3f}m")
+                
+                # Move to next waypoint
+                self.current_waypoint_idx = (self.current_waypoint_idx + 1) % len(self.waypoints)
+                
+                # Check if completed full cycle
+                if all(self.waypoints_passed):
+                    return self.complete_cycle()
+                    
+        return False
+
+    def complete_cycle(self):
+        """Handle completion of a full circular trajectory cycle"""
+        self.completed_cycles += 1
+        accuracy = sum(self.waypoints_passed) / len(self.waypoints)
+        self.cycle_accuracy_scores.append(accuracy)
+        
+        cycle_time = self.timestep - self.cycle_start_time
+        avg_accuracy = np.mean(self.cycle_accuracy_scores)
+        
+        print(f"🎉 CYCLE {self.completed_cycles} COMPLETED!")
+        print(f"   Accuracy: {accuracy:.1%} ({sum(self.waypoints_passed)}/{len(self.waypoints)} waypoints)")
+        print(f"   Cycle time: {cycle_time} steps")
+        print(f"   Average accuracy: {avg_accuracy:.1%}")
+        
+        # Reset for next cycle
+        self.waypoints_passed = [False] * len(self.waypoints)
+        self.current_waypoint_idx = 0
+        self.cycle_start_time = self.timestep
+        
+        return True  # Cycle completed
+
+    def generate_ideal_trajectory(self, num_points=100):
+        """Generate ideal circular trajectory points for comparison"""
+        if not self.waypoints:
+            return []
+            
+        ideal_points = []
+        for i in range(num_points):
+            angle = (2 * np.pi * i) / num_points
+            point = [
+                self.trajectory_center[0] + self.trajectory_radius * np.cos(angle),
+                self.trajectory_center[1] + self.trajectory_radius * np.sin(angle),
+                self.trajectory_z_base
+            ]
+            ideal_points.append(point)
+        
+        return ideal_points
+
+    def calculate_trajectory_similarity(self, actual_trajectory, ideal_trajectory):
+        """Calculate similarity between actual and ideal trajectories using DTW-like comparison"""
+        if not actual_trajectory or not ideal_trajectory:
+            return 0.0
+            
+        # Extract positions only
+        actual_positions = [point['position'] for point in actual_trajectory]
+        
+        # Find closest matches between actual and ideal points
+        similarity_scores = []
+        for actual_pos in actual_positions:
+            min_distance = float('inf')
+            for ideal_pos in ideal_trajectory:
+                distance = np.linalg.norm(np.array(actual_pos) - np.array(ideal_pos))
+                min_distance = min(min_distance, distance)
+            
+            # Convert distance to similarity score (0-1, where 1 is perfect)
+            similarity = max(0, 1 - (min_distance / (self.trajectory_radius * 2)))
+            similarity_scores.append(similarity)
+        
+        return np.mean(similarity_scores) if similarity_scores else 0.0
+
+    def calculate_waypoint_timing_accuracy(self, trajectory):
+        """Calculate how well the timing of waypoint passages matches ideal timing"""
+        if not self.waypoints or not trajectory:
+            return 0.0
+            
+        # Expected time between waypoints (assuming uniform circular motion)
+        total_circumference = 2 * np.pi * self.trajectory_radius
+        expected_speed = total_circumference / len(trajectory)  # Approximate speed
+        expected_waypoint_interval = (total_circumference / len(self.waypoints)) / expected_speed
+        
+        # Find actual waypoint passage times
+        waypoint_passage_times = []
+        for i, waypoint in enumerate(self.waypoints):
+            closest_time = None
+            min_distance = float('inf')
+            
+            for point in trajectory:
+                distance = np.linalg.norm(np.array(point['position']) - np.array(waypoint))
+                if distance < min_distance:
+                    min_distance = distance
+                    closest_time = point['timestep']
+            
+            if closest_time is not None and min_distance < self.waypoint_tolerance * 2:
+                waypoint_passage_times.append((i, closest_time))
+        
+        if len(waypoint_passage_times) < 2:
+            return 0.0
+        
+        # Calculate timing errors between consecutive waypoint passages
+        timing_errors = []
+        for i in range(1, len(waypoint_passage_times)):
+            actual_interval = waypoint_passage_times[i][1] - waypoint_passage_times[i-1][1]
+            timing_error = abs(actual_interval - expected_waypoint_interval) / expected_waypoint_interval
+            timing_errors.append(timing_error)
+        
+        # Convert error to accuracy (0-1, where 1 is perfect timing)
+        avg_timing_error = np.mean(timing_errors) if timing_errors else 1.0
+        timing_accuracy = max(0, 1 - avg_timing_error)
+        
+        return timing_accuracy
+
+    def calculate_distance_accuracy(self, trajectory):
+        """Calculate average distance accuracy from ideal circular path"""
+        if not trajectory:
+            return 0.0
+            
+        distance_errors = []
+        for point in trajectory:
+            pos = np.array(point['position'])
+            # Calculate distance from trajectory center
+            center_distance = np.linalg.norm(pos[:2] - np.array(self.trajectory_center))
+            # Error is difference from ideal radius
+            radius_error = abs(center_distance - self.trajectory_radius)
+            distance_errors.append(radius_error)
+        
+        avg_distance_error = np.mean(distance_errors) if distance_errors else self.trajectory_radius
+        # Convert to accuracy (0-1, where 1 is perfect)
+        distance_accuracy = max(0, 1 - (avg_distance_error / self.trajectory_radius))
+        
+        return distance_accuracy
+
+    def calculate_episode_accuracy(self):
+        """Calculate comprehensive accuracy metrics for the completed episode"""
+        if not self.current_episode_trajectory:
+            return
+            
+        trajectory = self.current_episode_trajectory
+        episode_num = self.episode_count
+        
+        # Generate ideal trajectory for comparison
+        ideal_trajectory = self.generate_ideal_trajectory()
+        
+        # Calculate different accuracy metrics
+        distance_accuracy = self.calculate_distance_accuracy(trajectory)
+        timing_accuracy = self.calculate_waypoint_timing_accuracy(trajectory)
+        similarity_score = self.calculate_trajectory_similarity(trajectory, ideal_trajectory)
+        
+        # Calculate waypoint passage rate
+        waypoints_passed_count = sum(1 for wp in self.waypoints_passed) if self.waypoints_passed else 0
+        waypoint_passage_rate = waypoints_passed_count / len(self.waypoints) if self.waypoints else 0.0
+        
+        # Calculate cycle completion rate (cycles per episode)
+        episode_duration = len(trajectory)
+        cycle_completion_rate = self.completed_cycles / max(1, episode_duration / 100)  # Normalize by episode length
+        
+        # Overall accuracy score (weighted combination)
+        overall_accuracy = (
+            0.3 * distance_accuracy +
+            0.2 * timing_accuracy + 
+            0.3 * similarity_score +
+            0.2 * waypoint_passage_rate
+        )
+        
+        # Store episode results
+        episode_results = {
+            'episode': episode_num,
+            'overall_accuracy': overall_accuracy,
+            'distance_accuracy': distance_accuracy,
+            'timing_accuracy': timing_accuracy,
+            'similarity_score': similarity_score,
+            'waypoint_passage_rate': waypoint_passage_rate,
+            'cycle_completion_rate': cycle_completion_rate,
+            'trajectory_length': len(trajectory),
+            'cycles_completed': self.completed_cycles
+        }
+        
+        self.episode_accuracy_history.append(episode_results)
+        
+        # Update statistics
+        self.episode_statistics['distance_errors'].append(1 - distance_accuracy)
+        self.episode_statistics['timing_errors'].append(1 - timing_accuracy)
+        self.episode_statistics['waypoint_passage_rates'].append(waypoint_passage_rate)
+        self.episode_statistics['cycle_completion_rates'].append(cycle_completion_rate)
+        self.episode_statistics['trajectory_similarity_scores'].append(similarity_score)
+        
+        # Print episode summary
+        print(f"\n📈 EPISODE {episode_num} TRAJECTORY ACCURACY REPORT:")
+        print(f"   Overall Accuracy: {overall_accuracy:.1%}")
+        print(f"   Distance Accuracy: {distance_accuracy:.1%} (avg radius error: {(1-distance_accuracy)*self.trajectory_radius*100:.1f}cm)")
+        print(f"   Timing Accuracy: {timing_accuracy:.1%}")
+        print(f"   Trajectory Similarity: {similarity_score:.1%}")
+        print(f"   Waypoint Passage Rate: {waypoint_passage_rate:.1%} ({waypoints_passed_count}/{len(self.waypoints) if self.waypoints else 0})")
+        print(f"   Cycle Completion Rate: {cycle_completion_rate:.2f} cycles/episode")
+        print(f"   Trajectory Points Recorded: {len(trajectory)}")
+        
+        # Print running statistics every 10 episodes
+        if episode_num % 10 == 0:
+            self.print_accuracy_statistics()
+
+    def print_accuracy_statistics(self):
+        """Print comprehensive accuracy statistics"""
+        if not self.episode_accuracy_history:
+            return
+            
+        recent_episodes = self.episode_accuracy_history[-10:]  # Last 10 episodes
+        all_episodes = self.episode_accuracy_history
+        
+        print(f"\n📊 TRAJECTORY ACCURACY STATISTICS (Episodes {max(1, self.episode_count-9)}-{self.episode_count}):")
+        print(f"   Recent Average Accuracy: {np.mean([ep['overall_accuracy'] for ep in recent_episodes]):.1%}")
+        print(f"   All-Time Average Accuracy: {np.mean([ep['overall_accuracy'] for ep in all_episodes]):.1%}")
+        print(f"   Best Episode Accuracy: {max([ep['overall_accuracy'] for ep in all_episodes]):.1%} (Episode {[ep['episode'] for ep in all_episodes if ep['overall_accuracy'] == max([e['overall_accuracy'] for e in all_episodes])][0]})")
+        print(f"   Recent Distance Accuracy: {np.mean([ep['distance_accuracy'] for ep in recent_episodes]):.1%}")
+        print(f"   Recent Timing Accuracy: {np.mean([ep['timing_accuracy'] for ep in recent_episodes]):.1%}")
+        print(f"   Recent Similarity Score: {np.mean([ep['similarity_score'] for ep in recent_episodes]):.1%}")
+        print(f"   Recent Waypoint Success: {np.mean([ep['waypoint_passage_rate'] for ep in recent_episodes]):.1%}")
+        print(f"   Improvement Trend: {self.calculate_improvement_trend()}")
+
+    def calculate_improvement_trend(self):
+        """Calculate if accuracy is improving over recent episodes"""
+        if len(self.episode_accuracy_history) < 6:
+            return "Insufficient data"
+            
+        recent_half = self.episode_accuracy_history[-3:]
+        earlier_half = self.episode_accuracy_history[-6:-3]
+        
+        recent_avg = np.mean([ep['overall_accuracy'] for ep in recent_half])
+        earlier_avg = np.mean([ep['overall_accuracy'] for ep in earlier_half])
+        
+        improvement = recent_avg - earlier_avg
+        if improvement > 0.05:
+            return f"Improving (+{improvement:.1%})"
+        elif improvement < -0.05:
+            return f"Declining ({improvement:.1%})"
+        else:
+            return f"Stable ({improvement:+.1%})"
+
     def reset(self):
+        # Calculate accuracy for the previous episode before resetting (only after first reset)
+        if hasattr(self, 'episode_count') and self.episode_count > 0 and len(self.current_episode_trajectory) > 0:
+            self.calculate_episode_accuracy()
+        
         # Reset robot and environment to start state
         # Only reset joint positions, don't remove robots from simulation
         try:
@@ -52,9 +353,21 @@ class MobileManipulatorEnv:
             
             # Reset Husky base velocity (don't reset position to avoid disrupting main simulation)
             self.p.resetBaseVelocity(self.husky, linearVelocity=[0, 0, 0], angularVelocity=[0, 0, 0])
+            
+            # Reset waypoint tracking for new episode
+            self.current_waypoint_idx = 0
+            if self.waypoints:
+                self.waypoints_passed = [False] * len(self.waypoints)
+            self.cycle_start_time = 0
         except Exception as e:
             print(f"Warning: RL reset error (non-fatal): {e}")
         
+        # Start new episode tracking
+        if not hasattr(self, 'episode_count'):
+            self.episode_count = 0
+        self.episode_count += 1
+        self.current_episode_trajectory = []
+        self.current_episode_start_time = self.timestep if hasattr(self, 'timestep') else 0
         self.timestep = 0
         self.done = False
         # Don't randomize disturbance on reset - keep current scenario
@@ -145,6 +458,20 @@ class MobileManipulatorEnv:
         # Apply disturbance
         self.inject_disturbance()
         obs = self.get_state()
+        
+        # Record trajectory point for accuracy calculation
+        try:
+            ee_pos = obs[-4:-1]  # End-effector position from state
+            trajectory_point = {
+                'timestep': self.timestep,
+                'position': ee_pos.copy(),
+                'goal': self.goal_pose[:3].copy() if hasattr(self.goal_pose, '__len__') else [0, 0, 0],
+                'waypoint_idx': self.current_waypoint_idx if self.waypoints else -1
+            }
+            self.current_episode_trajectory.append(trajectory_point)
+        except Exception as e:
+            print(f"Warning: Trajectory recording error: {e}")
+        
         rew = self.get_reward(obs, action)
         self.timestep += 1
         done_flag = self.check_done(obs)
@@ -202,6 +529,22 @@ class MobileManipulatorEnv:
         ee_pos = obs[-4:-1]  # End-effector position
         ee_error = np.linalg.norm(ee_pos - self.goal_pose[:3])
         
+        # WAYPOINT TRAJECTORY TRACKING REWARD
+        waypoint_reward = 0.0
+        trajectory_progress_reward = 0.0
+        
+        if self.waypoints:
+            # Check waypoint passage and give completion reward
+            cycle_completed = self.check_waypoint_passage(ee_pos)
+            if cycle_completed:
+                waypoint_reward = 50.0  # Large reward for completing full cycle
+                
+            # Trajectory progress reward - reward for being close to current waypoint
+            if self.current_waypoint_idx < len(self.waypoints):
+                current_waypoint = self.waypoints[self.current_waypoint_idx]
+                waypoint_distance = np.linalg.norm(np.array(ee_pos) - np.array(current_waypoint))
+                trajectory_progress_reward = -5.0 * waypoint_distance  # Reward proximity to next waypoint
+        
         # Base disturbance detection (linear and angular velocities)
         base_lin_vel = obs[-6:-3]  # Base linear velocity from IMU
         base_ang_vel = obs[-3:]    # Base angular velocity from IMU
@@ -240,12 +583,12 @@ class MobileManipulatorEnv:
             success_bonus = 2.0
         
         # Total reward focused on PRECISE END-EFFECTOR CONTROL DESPITE DISTURBANCES
-        rew = precision_reward + disturbance_compensation_bonus + smoothness_reward + success_bonus
+        rew = precision_reward + disturbance_compensation_bonus + smoothness_reward + success_bonus + waypoint_reward + trajectory_progress_reward
         
         return rew
 
     def check_done(self, obs):
-        # Success criteria focused on PRECISE END-EFFECTOR POSITIONING
+        # Success criteria focused on PRECISE END-EFFECTOR POSITIONING and TRAJECTORY COMPLETION
         ee_pos = obs[-4:-1]
         ee_error = np.linalg.norm(ee_pos - self.goal_pose[:3])
         
@@ -258,9 +601,16 @@ class MobileManipulatorEnv:
         else:
             self.precision_counter = 0
             
-        # Success after maintaining precision for 10 consecutive steps
-        # This ensures the system can maintain precision despite ongoing disturbances
-        return self.precision_counter >= 10
+        # Enhanced success criteria: precision AND trajectory progress
+        precision_success = self.precision_counter >= 10
+        
+        # Additional success: completing a full cycle with high accuracy
+        cycle_success = False
+        if self.completed_cycles > 0 and self.cycle_accuracy_scores:
+            recent_accuracy = self.cycle_accuracy_scores[-1] if self.cycle_accuracy_scores else 0
+            cycle_success = recent_accuracy >= 0.8  # 80% waypoint accuracy
+            
+        return precision_success or cycle_success
 
     def inject_disturbance(self):
         # REALISTIC DISTURBANCES for testing precise end-effector control
@@ -290,6 +640,38 @@ class MobileManipulatorEnv:
                 force = [random.choice([-200, 200]), random.choice([-200, 200]), 0]
                 self.p.applyExternalForce(self.husky, -1, force, [0, 0, 0], self.p.WORLD_FRAME)
         # else: no disturbance
+
+    def get_accuracy_summary(self):
+        """Get comprehensive accuracy summary for external reporting"""
+        if not self.episode_accuracy_history:
+            return {
+                'total_episodes': 0,
+                'current_accuracy': 0.0,
+                'average_accuracy': 0.0,
+                'best_accuracy': 0.0,
+                'accuracy_trend': 'No data',
+                'recent_stats': {}
+            }
+        
+        recent_episodes = self.episode_accuracy_history[-10:] if len(self.episode_accuracy_history) >= 10 else self.episode_accuracy_history
+        all_episodes = self.episode_accuracy_history
+        
+        return {
+            'total_episodes': len(all_episodes),
+            'current_accuracy': all_episodes[-1]['overall_accuracy'] if all_episodes else 0.0,
+            'average_accuracy': np.mean([ep['overall_accuracy'] for ep in all_episodes]),
+            'best_accuracy': max([ep['overall_accuracy'] for ep in all_episodes]),
+            'best_episode': [ep['episode'] for ep in all_episodes if ep['overall_accuracy'] == max([e['overall_accuracy'] for e in all_episodes])][0],
+            'accuracy_trend': self.calculate_improvement_trend(),
+            'recent_stats': {
+                'distance_accuracy': np.mean([ep['distance_accuracy'] for ep in recent_episodes]),
+                'timing_accuracy': np.mean([ep['timing_accuracy'] for ep in recent_episodes]),
+                'similarity_score': np.mean([ep['similarity_score'] for ep in recent_episodes]),
+                'waypoint_success_rate': np.mean([ep['waypoint_passage_rate'] for ep in recent_episodes]),
+                'average_trajectory_length': np.mean([ep['trajectory_length'] for ep in recent_episodes]),
+                'total_cycles_completed': sum([ep['cycles_completed'] for ep in recent_episodes])
+            }
+        }
 
 class QLearningAgent:
     """

@@ -1103,8 +1103,8 @@ if TRAIN_BOTH_ALGORITHMS:
     rl_sequential_training_status = {'first_algorithm_completed': False, 'both_completed': False}
 
 # === RL TRAINING LOOP HOOK ===
-rl_training_enabled = False  # Set to True to enable automatic training on startup
-rl_training_mode = False  # Toggle during simulation with 't' key
+rl_training_enabled = True  # Set to True to enable automatic training on startup
+rl_training_mode = True  # Toggle during simulation with 't' key
 
 # Training Configuration Options (uncomment one):
 # rl_num_episodes = 100      # TESTING: ~10 min total (all scenarios) - For debugging only
@@ -1731,10 +1731,14 @@ while 1:
       disturbance_manager.set_scenario(scenario)
       disturbance_manager.set_intensity_mode(intensity)
       
+      # Initialize waypoints for circular trajectory tracking
+      rl_env.generate_waypoints(circle_center, num_waypoints=8)
+      
       intensity_symbol = "⚡" if intensity == "golden" else "📊"
       intensity_factor = disturbance_manager.intensity_modes[intensity]["factor"]
       print(f"\n[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} ({intensity_factor}x) - Episode {rl_current_episode + 1}/{rl_num_episodes}")
       print(f"🌪️  Scenario: {scenario.upper()} | Intensity: {intensity.upper()} | Combination {rl_current_combination_idx + 1}/{len(rl_training_combinations)}")
+      print(f"🎯 Trajectory center: [{circle_center[0]:.2f}, {circle_center[1]:.2f}], radius: {rl_env.trajectory_radius}m")
     
     # UPDATE GOAL TRAJECTORY - Use same trajectory as main simulation
     trajectory_radius = 0.2  # Same as main simulation
@@ -1772,26 +1776,61 @@ while 1:
     if rl_done or rl_step_counter >= rl_max_steps:
       final_error = np.linalg.norm(rl_state[-4:-1] - rl_env.goal_pose[:3])
       
+      # Calculate trajectory completion metrics
+      waypoints_passed = sum(rl_env.waypoints_passed) if rl_env.waypoints else 0
+      total_waypoints = len(rl_env.waypoints) if rl_env.waypoints else 0
+      trajectory_completion = (waypoints_passed / total_waypoints * 100) if total_waypoints > 0 else 0
+      cycles_completed = rl_env.completed_cycles
+      
       if rl_done:
         rl_metrics[combo_key]['success'] += 1
-        print(f"[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} Episode {rl_current_episode + 1} SUCCESS: steps={rl_step_counter}, error={final_error:.3f}, energy={ep_energy}")
+        print(f"[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} Episode {rl_current_episode + 1} SUCCESS:")
+        print(f"   Steps: {rl_step_counter}, Error: {final_error:.3f}m, Energy: {ep_energy}")
+        print(f"   Trajectory: {waypoints_passed}/{total_waypoints} waypoints ({trajectory_completion:.1f}%), {cycles_completed} cycles")
         
         # Capture screenshot for successful episodes (every 10th success)
         success_count = rl_metrics[combo_key]['success']
         if success_count % 10 == 0:  # Only capture every 10th success to avoid too many photos
           photo_manager.capture_training_screenshot(scenario, rl_current_episode + 1, rl_current_algorithm)
       else:
-        print(f"[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} Episode {rl_current_episode + 1} TIMEOUT: steps={rl_step_counter}, error={final_error:.3f}, energy={ep_energy}")
+        print(f"[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} Episode {rl_current_episode + 1} TIMEOUT:")
+        print(f"   Steps: {rl_step_counter}, Error: {final_error:.3f}m, Energy: {ep_energy}")
+        print(f"   Trajectory: {waypoints_passed}/{total_waypoints} waypoints ({trajectory_completion:.1f}%), {cycles_completed} cycles")
       
       rl_metrics[combo_key]['errors'].append(final_error)
       rl_metrics[combo_key]['steps'].append(rl_step_counter)
       rl_metrics[combo_key]['energy'].append(ep_energy)
       rl_metrics[combo_key]['episodes'] += 1
       
+      # Track trajectory completion metrics
+      if 'trajectory_completion' not in rl_metrics[combo_key]:
+        rl_metrics[combo_key]['trajectory_completion'] = []
+        rl_metrics[combo_key]['cycles_completed'] = []
+      rl_metrics[combo_key]['trajectory_completion'].append(trajectory_completion)
+      rl_metrics[combo_key]['cycles_completed'].append(cycles_completed)
+      
       # Reset for next episode
       rl_step_counter = 0
       rl_current_episode += 1
       rl_metrics[combo_key]['current_energy'] = 0
+      
+      # Print trajectory performance summary every 50 episodes
+      if rl_current_episode % 50 == 0 and rl_current_episode > 0:
+        if 'trajectory_completion' in rl_metrics[combo_key] and rl_metrics[combo_key]['trajectory_completion']:
+          avg_trajectory_completion = np.mean(rl_metrics[combo_key]['trajectory_completion'][-50:])
+          avg_cycles = np.mean(rl_metrics[combo_key]['cycles_completed'][-50:])
+          best_trajectory = max(rl_metrics[combo_key]['trajectory_completion'][-50:])
+          best_cycles = max(rl_metrics[combo_key]['cycles_completed'][-50:])
+          
+          print(f"\n📊 TRAJECTORY PERFORMANCE SUMMARY (Episodes {rl_current_episode-49}-{rl_current_episode}):")
+          print(f"   Average trajectory completion: {avg_trajectory_completion:.1f}%")
+          print(f"   Average cycles per episode: {avg_cycles:.2f}")
+          print(f"   Best trajectory completion: {best_trajectory:.1f}%")
+          print(f"   Best cycles in episode: {best_cycles}")
+          
+          if len(rl_env.cycle_accuracy_scores) > 0:
+            avg_cycle_accuracy = np.mean(rl_env.cycle_accuracy_scores)
+            print(f"   Average cycle accuracy: {avg_cycle_accuracy:.1%}")
       
       # Save checkpoint every 100 episodes
       if rl_current_episode % 100 == 0 and rl_current_episode > 0:
