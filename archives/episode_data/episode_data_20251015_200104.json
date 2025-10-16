@@ -1,0 +1,48 @@
+{
+  "start_time": 1760569264.628144,
+  "scenario": "none",
+  "direction": "random",
+  "intensity": "normal",
+  "accuracy_samples": [
+    0
+  ],
+  "error_samples": [
+    11.831916999183065
+  ],
+  "accuracy_x_samples": [
+    0
+  ],
+  "accuracy_y_samples": [
+    0
+  ],
+  "accuracy_z_samples": [
+    0
+  ],
+  "error_x_samples": [
+    6.2494813681170776
+  ],
+  "error_y_samples": [
+    10.042572304591495
+  ],
+  "error_z_samples": [
+    0.2915201745446159
+  ],
+  "circles_completed": 595,
+  "episode_number": 2,
+  "end_time": 1760569264.639281,
+  "duration": 0.011137008666992188,
+  "avg_accuracy": 0.0,
+  "max_accuracy": 0,
+  "min_accuracy": 0,
+  "avg_error": 11.831916999183065,
+  "samples_count": 1,
+  "avg_accuracy_x": 0.0,
+  "avg_accuracy_y": 0.0,
+  "avg_accuracy_z": 0.0,
+  "avg_error_x": 6.2494813681170776,
+  "avg_error_y": 10.042572304591495,
+  "avg_error_z": 0.2915201745446159,
+  "max_error_x": 6.2494813681170776,
+  "max_error_y": 10.042572304591495,
+  "max_error_z": 0.2915201745446159
+}
