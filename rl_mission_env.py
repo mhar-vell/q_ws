@@ -3,19 +3,42 @@ import random
 
 class MobileManipulatorEnv:
     """
-    RL environment for Husky+KUKA mobile manipulator trajectory planning in PyBullet.
-    Models state, action, reward, and disturbances for Q-learning.
+    RL environment for Husky+KUKA mobile manipulator with PRECISE END-EFFECTOR CONTROL.
+    
+    MAIN OBJECTIVE: Execute precise end-effector movements despite disturbances 
+    at the base caused by platform motion or external forces.
+    
+    KEY FEATURES for disturbance rejection training:
+    - Enhanced reward function focused on end-effector precision under disturbances
+    - Disturbance compensation bonus rewards maintaining precision despite base motion
+    - Coordinated end-effector positioning actions for active disturbance compensation
+    - Realistic disturbance injection (random forces, periodic impacts, continuous bias)
+    - Success criteria requires sustained precision (10 consecutive precise steps)
+    - Adaptive joint control based on disturbance magnitude
+    
+    This environment specifically trains the manipulator to:
+    1. Detect base disturbances through IMU feedback
+    2. Actively compensate with coordinated joint movements
+    3. Maintain millimeter-level end-effector precision despite base motion
+    4. Prioritize end-effector accuracy over base stability
     """
     def __init__(self, pybullet_client, husky_id, kuka_id, goal_pose):
         self.p = pybullet_client
         self.husky = husky_id
         self.kuka = kuka_id
         self.goal_pose = goal_pose  # Desired end-effector pose (x, y, z)
-        self.state_dim = 14  # Example: 3 base + 7 joints + 4 end-effector
-        self.action_dim = 10 # Example: 7 joints + 3 base moves
+        self.state_dim = 14  # 3 base + 7 joints + 4 end-effector
+        # ENHANCED ACTION SPACE for precise end-effector control:
+        # 7 joints (+) + 7 joints (-) + 1 coordinated compensation + 3 base moves + 1 no-action
+        num_kuka_joints = 7  # KUKA iiwa has 7 joints
+        self.action_dim = 2 * num_kuka_joints + 1 + 3 + 1  # 14 + 1 + 3 + 1 = 19 actions
         self.disturbance_types = ['none', 'random', 'periodic', 'continuous', 'impulse']
         self.current_disturbance = 'none'
         self.reset()
+
+    def update_goal(self, new_goal_pose):
+        """Update the goal pose dynamically during training"""
+        self.goal_pose = new_goal_pose
 
     def reset(self):
         # Reset robot and environment to start state
@@ -38,34 +61,86 @@ class MobileManipulatorEnv:
         return self.get_state()
 
     def step(self, action):
-        # Map actions to robot commands
-        # Actions 0-6: KUKA joint increments
-        # Actions 7: Husky forward, 8: turn left, 9: turn right
-        joint_delta = 0.05  # radians per step
-        base_speed = 0.2    # meters per step
-        base_turn = 0.2     # radians per step
-
+        # ENHANCED ACTION SPACE FOR PRECISE END-EFFECTOR CONTROL
+        # Actions focused on compensating for base disturbances
+        
         num_kuka_joints = self.p.getNumJoints(self.kuka)
-        # Get current joint positions
         joint_states = [self.p.getJointState(self.kuka, i) for i in range(num_kuka_joints)]
         joint_positions = [js[0] for js in joint_states]
-
-        # Apply joint action
+        
+        # Adaptive joint deltas based on disturbance level
+        base_vel = np.linalg.norm(self.p.getBaseVelocity(self.husky)[0])
+        if base_vel > 0.1:  # High disturbance - larger corrections needed
+            joint_delta = 0.08
+        else:  # Low disturbance - fine adjustments
+            joint_delta = 0.03
+            
+        # Action categories for disturbance compensation:
         if 0 <= action < num_kuka_joints:
-            # Increment joint i
+            # Individual joint positive increments
             new_pos = joint_positions.copy()
             new_pos[action] += joint_delta
             self.p.setJointMotorControlArray(self.kuka, range(num_kuka_joints),
                                             self.p.POSITION_CONTROL, targetPositions=new_pos)
-        elif action == num_kuka_joints:
-            # Husky forward
+                                            
+        elif num_kuka_joints <= action < 2 * num_kuka_joints:
+            # Individual joint negative increments
+            joint_idx = action - num_kuka_joints
+            new_pos = joint_positions.copy()
+            new_pos[joint_idx] -= joint_delta
+            self.p.setJointMotorControlArray(self.kuka, range(num_kuka_joints),
+                                            self.p.POSITION_CONTROL, targetPositions=new_pos)
+                                            
+        elif action == 2 * num_kuka_joints:
+            # COORDINATED COMPENSATION: Move end-effector towards target
+            # This is the key action for disturbance compensation
+            ee_link = num_kuka_joints - 1
+            ee_state = self.p.getLinkState(self.kuka, ee_link)
+            ee_pos = ee_state[0]
+            
+            # Calculate direction to target
+            target_direction = np.array(self.goal_pose[:3]) - np.array(ee_pos)
+            if np.linalg.norm(target_direction) > 0:
+                target_direction = target_direction / np.linalg.norm(target_direction)
+                
+                # Simple inverse kinematics approximation for compensation
+                # Move joints to bring end-effector closer to target
+                correction_scale = 0.02  # Small corrections for stability
+                new_pos = joint_positions.copy()
+                
+                # Heuristic joint corrections for end-effector positioning
+                # Joint 0 (base rotation) - for X-Y positioning
+                if abs(target_direction[0]) > 0.1:
+                    new_pos[0] += correction_scale * np.sign(target_direction[0])
+                    
+                # Joint 1 (shoulder) - for Z positioning and reach
+                if target_direction[2] > 0.1:  # Need to reach higher
+                    new_pos[1] -= correction_scale
+                elif target_direction[2] < -0.1:  # Need to reach lower
+                    new_pos[1] += correction_scale
+                    
+                # Joint 2 (elbow) - for reach extension/retraction
+                reach_error = np.linalg.norm(target_direction[:2])
+                if reach_error > 0.1:
+                    new_pos[2] += correction_scale * reach_error
+                
+                self.p.setJointMotorControlArray(self.kuka, range(num_kuka_joints),
+                                                self.p.POSITION_CONTROL, targetPositions=new_pos)
+        
+        # Base movements (reduced priority - focus is on arm compensation)
+        elif action == 2 * num_kuka_joints + 1:
+            # Minimal base movements - only for repositioning if absolutely needed
+            base_speed = 0.1  # Reduced speed to minimize disturbances
             self.p.resetBaseVelocity(self.husky, linearVelocity=[base_speed, 0, 0])
-        elif action == num_kuka_joints + 1:
-            # Husky turn left
-            self.p.resetBaseVelocity(self.husky, angularVelocity=[0, 0, base_turn])
-        elif action == num_kuka_joints + 2:
-            # Husky turn right
-            self.p.resetBaseVelocity(self.husky, angularVelocity=[0, 0, -base_turn])
+        elif action == 2 * num_kuka_joints + 2:
+            # Turn left (minimal)
+            self.p.resetBaseVelocity(self.husky, angularVelocity=[0, 0, 0.1])
+        elif action == 2 * num_kuka_joints + 3:
+            # Turn right (minimal)
+            self.p.resetBaseVelocity(self.husky, angularVelocity=[0, 0, -0.1])
+        else:
+            # No action - sometimes the best response to disturbance is to hold position
+            pass
 
         # Apply disturbance
         self.inject_disturbance()
@@ -121,42 +196,96 @@ class MobileManipulatorEnv:
         return obs
 
     def get_reward(self, obs, action):
-        # End-effector error (distance to goal)
-        ee_error = np.linalg.norm(obs[-4:-1] - self.goal_pose[:3])
-
-        # IMU instability penalty (base linear acceleration)
-        # Assume IMU data is last 6 elements: [vx, vy, vz, wx, wy, wz]
-        imu_accel = np.linalg.norm(obs[-6:-3])
-        instability_penalty = 0.2 * imu_accel  # Weight for instability
-
-        # Energy/smoothness penalty (large joint/base movements)
-        # Penalize if action is a base move or large joint change
-        energy_penalty = 0.0
-        if action >= self.p.getNumJoints(self.kuka):
-            energy_penalty = 0.1  # Penalize base moves
-
-        # Total reward: negative error, minus penalties
-        rew = -ee_error - instability_penalty - energy_penalty
+        # MAIN OBJECTIVE: Precise end-effector movement despite base disturbances
+        
+        # End-effector error (primary objective)
+        ee_pos = obs[-4:-1]  # End-effector position
+        ee_error = np.linalg.norm(ee_pos - self.goal_pose[:3])
+        
+        # Base disturbance detection (linear and angular velocities)
+        base_lin_vel = obs[-6:-3]  # Base linear velocity from IMU
+        base_ang_vel = obs[-3:]    # Base angular velocity from IMU
+        base_disturbance = np.linalg.norm(base_lin_vel) + np.linalg.norm(base_ang_vel)
+        
+        # Core reward: End-effector precision reward
+        precision_reward = -10.0 * ee_error  # High weight for precision
+        
+        # Disturbance compensation reward: Better reward when maintaining precision despite disturbances
+        if base_disturbance > 0.1:  # If base is disturbed
+            if ee_error < 0.05:  # But end-effector stays precise (5cm tolerance)
+                disturbance_compensation_bonus = 5.0  # Large bonus for maintaining precision
+            elif ee_error < 0.1:   # Moderate precision under disturbance
+                disturbance_compensation_bonus = 2.0
+            else:
+                disturbance_compensation_bonus = 0.0  # No bonus if precision lost
+        else:
+            disturbance_compensation_bonus = 0.0
+        
+        # Stability bonus: Reward smooth joint movements (avoid jerky corrections)
+        if hasattr(self, 'prev_joint_pos'):
+            joint_positions = obs[3:10]  # KUKA joint positions (7 joints)
+            joint_velocity = np.linalg.norm(np.array(joint_positions) - np.array(self.prev_joint_pos))
+            smoothness_reward = -0.5 * joint_velocity  # Penalize large joint movements
+        else:
+            smoothness_reward = 0.0
+        self.prev_joint_pos = obs[3:10]  # Store for next step
+        
+        # Success bonus for reaching target precisely
+        success_bonus = 0.0
+        if ee_error < 0.01:  # 1cm precision
+            success_bonus = 10.0
+        elif ee_error < 0.02:  # 2cm precision
+            success_bonus = 5.0
+        elif ee_error < 0.05:  # 5cm moderate progress
+            success_bonus = 2.0
+        
+        # Total reward focused on PRECISE END-EFFECTOR CONTROL DESPITE DISTURBANCES
+        rew = precision_reward + disturbance_compensation_bonus + smoothness_reward + success_bonus
+        
         return rew
 
     def check_done(self, obs):
-        # Success if end-effector is close to goal
-        error = np.linalg.norm(obs[-4:-1] - self.goal_pose[:3])
-        return error < 0.01  # 1cm tolerance
+        # Success criteria focused on PRECISE END-EFFECTOR POSITIONING
+        ee_pos = obs[-4:-1]
+        ee_error = np.linalg.norm(ee_pos - self.goal_pose[:3])
+        
+        # Success if maintaining precision for multiple timesteps
+        if not hasattr(self, 'precision_counter'):
+            self.precision_counter = 0
+            
+        if ee_error < 0.02:  # 2cm tolerance (realistic for mobile manipulation)
+            self.precision_counter += 1
+        else:
+            self.precision_counter = 0
+            
+        # Success after maintaining precision for 10 consecutive steps
+        # This ensures the system can maintain precision despite ongoing disturbances
+        return self.precision_counter >= 10
 
     def inject_disturbance(self):
-        # Simulate disturbances based on current scenario
+        # REALISTIC DISTURBANCES for testing precise end-effector control
+        # These simulate real-world challenges: platform motion, external forces, etc.
+        
         if self.current_disturbance == 'random':
-            force = [random.uniform(-50, 50), random.uniform(-50, 50), 0]
+            # Continuous random disturbances (simulating uneven terrain, wind, etc.)
+            force = [random.uniform(-30, 30), random.uniform(-30, 30), 0]
+            torque = [0, 0, random.uniform(-10, 10)]  # Random turning torque
             self.p.applyExternalForce(self.husky, -1, force, [0, 0, 0], self.p.WORLD_FRAME)
+            self.p.applyExternalTorque(self.husky, -1, torque, self.p.WORLD_FRAME)
+            
         elif self.current_disturbance == 'periodic':
-            if self.timestep % 50 == 0:
-                force = [random.choice([-100, 100]), random.choice([-100, 100]), 0]
+            # Periodic impacts (simulating regular bumps, vibrations)
+            if self.timestep % 30 == 0:  # More frequent for better training
+                force = [random.choice([-80, 80]), random.choice([-80, 80]), 0]
                 self.p.applyExternalForce(self.husky, -1, force, [0, 0, 0], self.p.WORLD_FRAME)
+                
         elif self.current_disturbance == 'continuous':
-            force = [random.uniform(-10, 10), random.uniform(-10, 10), 0]
+            # Persistent bias forces (simulating slopes, constant wind)
+            force = [random.uniform(-15, 15), random.uniform(-15, 15), 0]
             self.p.applyExternalForce(self.husky, -1, force, [0, 0, 0], self.p.WORLD_FRAME)
+            
         elif self.current_disturbance == 'impulse':
+            # Single strong impulse to test recovery
             if self.timestep == 25:
                 force = [random.choice([-200, 200]), random.choice([-200, 200]), 0]
                 self.p.applyExternalForce(self.husky, -1, force, [0, 0, 0], self.p.WORLD_FRAME)

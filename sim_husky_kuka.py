@@ -1112,7 +1112,7 @@ rl_num_episodes = 500      # DEVELOPMENT: ~45 min total - Initial learning visib
 # rl_num_episodes = 2000     # PRODUCTION: ~3 hours total - Good performance (recommended)
 # rl_num_episodes = 5000     # HIGH-PERFORMANCE: ~8 hours total - Near-optimal performance
 
-rl_max_steps = 200         # Max steps per episode before timeout
+rl_max_steps = 100         # Max steps per episode before timeout (reduced for debugging)
 rl_episode_counter = 0
 rl_step_counter = 0
 rl_state = None
@@ -1735,6 +1735,24 @@ while 1:
       intensity_factor = disturbance_manager.intensity_modes[intensity]["factor"]
       print(f"\n[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} ({intensity_factor}x) - Episode {rl_current_episode + 1}/{rl_num_episodes}")
       print(f"🌪️  Scenario: {scenario.upper()} | Intensity: {intensity.upper()} | Combination {rl_current_combination_idx + 1}/{len(rl_training_combinations)}")
+    
+    # UPDATE GOAL TRAJECTORY - Use same trajectory as main simulation
+    trajectory_radius = 0.2  # Same as main simulation
+    trajectory_t = t  # Use same 't' variable as main simulation
+    
+    # Calculate current target position (same as main simulation trajectory)
+    current_goal = [
+      circle_center[0] + trajectory_radius * math.cos(trajectory_t),     # X: center + circular motion
+      circle_center[1] + trajectory_radius * math.sin(trajectory_t),     # Y: center + circular motion  
+      0.7 + 0.1 * math.sin(trajectory_t * 2)                           # Z: height with slight variation
+    ]
+    
+    # Update RL environment goal to match main simulation trajectory
+    rl_env.goal_pose[:3] = current_goal
+    
+    # Debug: Print goal position occasionally
+    if rl_step_counter % 50 == 0:
+      print(f"   Goal: [{current_goal[0]:.3f}, {current_goal[1]:.3f}, {current_goal[2]:.3f}]")
     
     # Execute one RL step per simulation frame
     rl_action = rl_agent.select_action(rl_state)
