@@ -785,11 +785,20 @@ class DisturbanceManager:
     def set_scenario(self, scenario_name):
         """Switch to a different disturbance scenario"""
         if scenario_name in self.scenarios:
+            # Check if this is actually a scenario change
+            scenario_changed = (self.current_scenario != scenario_name)
+            
             self.current_scenario = scenario_name
             self.step_counter = 0
             self.impulse_applied = False
             print(f"🎯 Switched to '{scenario_name.upper()}' disturbance scenario")
             print(f"   Description: {self.scenarios[scenario_name]['description']}")
+            
+            # Request simulation restart when scenario changes
+            if scenario_changed:
+                request_simulation_restart(f"Scenario changed to {scenario_name.upper()}")
+                print("   🔄 Simulation will restart to apply new scenario conditions")
+            
             return True
         else:
             print(f"❌ Unknown scenario: {scenario_name}")
@@ -1008,7 +1017,20 @@ if RL_AVAILABLE:
 
 # === RL ENVIRONMENT AND AGENT INITIALIZATION ===
 # After Husky and KUKA are loaded:
-rl_goal_pose = np.array([1.0, 0.0, 0.5, 0.0])  # Example goal pose (x, y, z, orientation)
+# RL Trajectory Following Setup
+from trajectory_generators import TrajectoryGenerator
+rl_trajectory_generator = TrajectoryGenerator(base_height=0.8, base_center=(0.0, 0.0))
+rl_trajectory_points = rl_trajectory_generator.generate_circle(num_points=20, radius=0.4, orientation='horizontal')  # Match autonomous circular path
+rl_current_trajectory_idx = 0
+rl_trajectory_phase = 0.0  # Phase for smooth circular trajectory (matching autonomous pattern)
+rl_trajectory_update_steps = 15  # Update trajectory target every N steps (slower for easier learning)
+
+# Key press timing control to prevent multiple triggers
+last_key_press_time = {}  # Track last press time for each key
+key_cooldown = 0.5  # Minimum seconds between key presses
+
+# Initialize with first trajectory point
+rl_goal_pose = np.array(rl_trajectory_points[0])  # Dynamic trajectory goal
 rl_env = MobileManipulatorEnv(pybullet_client=p, husky_id=husky, kuka_id=kukaId, goal_pose=rl_goal_pose)
 
 # === CHOOSE RL ALGORITHM ===
@@ -1251,10 +1273,500 @@ autonomous_speed = 0.8            # Speed for autonomous movement
 use_waypoints = False             # Set to False for smooth circular motion, True for waypoint-based
 
 # Optional: Waypoints around circle (for waypoint-based circular navigation)
-num_waypoints = 8                 # Number of waypoints around circle
+num_waypoints = 20                # Number of waypoints around circle (increased for RL precision)
 circle_waypoints = []             # Will be generated
 current_waypoint = 0              # Current target waypoint
 waypoint_tolerance = 0.15         # Distance tolerance to reach waypoint (meters)
+
+# Circular trajectory completion tracking
+circle_completion_tracking = {
+    'start_phase': 0,             # Phase when circle tracking started
+    'accuracy_samples': [],       # Accuracy measurements during circle
+    'error_samples': [],          # Error distance measurements during circle
+    'is_tracking': False,         # Whether we're currently tracking a circle
+    'completed_circles': 0,       # Number of completed circles tracked
+    'last_completion_accuracy': 0, # Accuracy of last completed circle
+    'best_accuracy': 0,           # Best circle accuracy achieved
+    'average_accuracy': 0         # Average accuracy across all circles
+}
+
+# Episode and scenario tracking for reporting
+session_tracking = {
+    'episodes': [],               # List of episode data
+    'current_episode': None,      # Current episode data
+    'current_scenario': '',       # Current scenario name
+    'scenario_start_time': 0,     # When current scenario started
+    'session_start_time': 0,      # When session started
+    'total_episodes': 0,          # Total episodes completed
+    'scenario_episodes': 0        # Episodes in current scenario
+}
+
+# Initialize session tracking
+session_tracking['session_start_time'] = time.time()
+
+# Simulation restart control
+restart_simulation = False
+restart_reason = ""
+
+# Archive management
+def create_archive_directories():
+    """Create archive directory structure if it doesn't exist"""
+    import os
+    
+    archive_dirs = [
+        "archives",
+        "archives/episode_data", 
+        "archives/scenario_reports",
+        "archives/session_summaries"
+    ]
+    
+    for dir_path in archive_dirs:
+        if not os.path.exists(dir_path):
+            os.makedirs(dir_path)
+            print(f"📁 Created archive directory: {dir_path}")
+
+def archive_existing_data():
+    """Archive any existing episode/scenario data files from root directory"""
+    import os
+    import glob
+    import shutil
+    from datetime import datetime
+    
+    # Ensure archive directories exist
+    create_archive_directories()
+    
+    archived_count = 0
+    
+    # Archive episode data files
+    episode_files = glob.glob("episode_data_*.json")
+    for file in episode_files:
+        try:
+            shutil.move(file, f"archives/episode_data/{file}")
+            archived_count += 1
+            print(f"📦 Archived: {file}")
+        except Exception as e:
+            print(f"❌ Could not archive {file}: {e}")
+    
+    # Archive scenario report files
+    scenario_files = glob.glob("scenario_report_*.json")
+    for file in scenario_files:
+        try:
+            shutil.move(file, f"archives/scenario_reports/{file}")
+            archived_count += 1
+            print(f"📦 Archived: {file}")
+        except Exception as e:
+            print(f"❌ Could not archive {file}: {e}")
+    
+    if archived_count > 0:
+        print(f"✅ Successfully archived {archived_count} data files")
+        
+        # Create archive summary
+        summary = {
+            'archive_date': datetime.now().isoformat(),
+            'archived_files': archived_count,
+            'episode_files': len(episode_files),
+            'scenario_files': len(scenario_files),
+            'note': 'Data archived before new session'
+        }
+        
+        summary_file = f"archives/session_summaries/archive_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        try:
+            import json
+            with open(summary_file, 'w') as f:
+                json.dump(summary, f, indent=2)
+            print(f"📄 Archive summary saved: {summary_file}")
+        except Exception as e:
+            print(f"⚠️  Could not save archive summary: {e}")
+    else:
+        print("ℹ️  No data files to archive")
+
+def list_archives():
+    """List all archived data with summary statistics"""
+    import os
+    import json
+    from datetime import datetime
+    
+    if not os.path.exists("archives"):
+        print("📁 No archives directory found")
+        return
+    
+    print("\n📊 ARCHIVE INVENTORY")
+    
+    # Count files in each archive directory
+    episode_count = len([f for f in os.listdir("archives/episode_data") if f.endswith('.json')]) if os.path.exists("archives/episode_data") else 0
+    scenario_count = len([f for f in os.listdir("archives/scenario_reports") if f.endswith('.json')]) if os.path.exists("archives/scenario_reports") else 0
+    session_count = len([f for f in os.listdir("archives/session_summaries") if f.endswith('.json')]) if os.path.exists("archives/session_summaries") else 0
+    
+    print(f"   📝 Episode Data Files: {episode_count}")
+    print(f"   📊 Scenario Reports: {scenario_count}")
+    print(f"   📄 Session Summaries: {session_count}")
+    print(f"   📁 Total Archived Files: {episode_count + scenario_count + session_count}")
+    
+    # Show recent session summaries
+    if session_count > 0:
+        print(f"\n   🕒 Recent Session Summaries:")
+        session_files = sorted([f for f in os.listdir("archives/session_summaries") if f.endswith('.json')])[-3:]
+        for file in session_files:
+            try:
+                with open(f"archives/session_summaries/{file}", 'r') as f:
+                    data = json.load(f)
+                    episodes = data.get('session_info', {}).get('total_episodes', 0)
+                    accuracy = data.get('performance_summary', {}).get('overall_accuracy', 0)
+                print(f"      • {file}: {episodes} episodes, {accuracy:.1f}% avg accuracy")
+            except:
+                print(f"      • {file}: (summary unavailable)")
+    
+    print(f"   💡 Use archives/ directory to access all historical data")
+
+def request_simulation_restart(reason="Manual restart"):
+    """Request a simulation restart with specified reason"""
+    global restart_simulation, restart_reason
+    restart_simulation = True
+    restart_reason = reason
+    print(f"🔄 Simulation restart requested: {reason}")
+
+def reset_robot_state():
+    """Reset robot to initial position and state"""
+    global current_waypoint, path_completed_laps, circle_completion_tracking
+    global rl_trajectory_phase, rl_start_time, rl_step_count, restart_simulation, restart_reason
+    
+    # Reset robot position to starting point
+    start_pos = [0, 0, 0.7]  # Starting position
+    start_orientation = p.getQuaternionFromEuler([0, 0, 0])  # Starting orientation
+    
+    try:
+        # Reset Husky robot position
+        p.resetBasePositionAndOrientation(husky, start_pos, start_orientation)
+        
+        # Reset Kuka arm position if it exists
+        if 'kukaId' in globals():
+            arm_start_pos = [0.5, 0, 0.5]  # Kuka arm starting position
+            p.resetBasePositionAndOrientation(kukaId, arm_start_pos, start_orientation)
+        
+        # Stop all wheel movement
+        for i in range(len(wheels)):
+            p.setJointMotorControl2(husky, wheels[i], p.VELOCITY_CONTROL, targetVelocity=0, force=500)
+        
+        # Reset trajectory tracking variables
+        current_waypoint = 0
+        path_completed_laps = 0
+        circle_completion_tracking['completed_circles'] = 0
+        circle_completion_tracking['current_progress'] = 0
+        circle_completion_tracking['best_accuracy'] = 0
+        circle_completion_tracking['average_accuracy'] = 0
+        
+        # Reset RL training variables if RL is active
+        if RL_AVAILABLE:
+            rl_trajectory_phase = 0.0
+            rl_step_count = 0
+            rl_start_time = time.time()
+        
+        print("🔄 Robot state reset to initial position")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error resetting robot state: {e}")
+        return False
+
+def request_simulation_restart(reason="Manual restart"):
+    """Request a simulation restart with specified reason"""
+    global restart_simulation, restart_reason
+    restart_simulation = True
+    restart_reason = reason
+    print(f"🔄 Simulation restart requested: {reason}")
+
+def complete_episode():
+    """Complete current episode and generate report"""
+    if session_tracking['current_episode'] is None:
+        return
+    
+    import json
+    from datetime import datetime
+    
+    episode = session_tracking['current_episode']
+    episode['end_time'] = time.time()
+    episode['duration'] = episode['end_time'] - episode['start_time']
+    
+    # Calculate episode statistics (overall and component-wise)
+    if episode['accuracy_samples']:
+        # Overall statistics
+        episode['avg_accuracy'] = sum(episode['accuracy_samples']) / len(episode['accuracy_samples'])
+        episode['max_accuracy'] = max(episode['accuracy_samples'])
+        episode['min_accuracy'] = min(episode['accuracy_samples'])
+        episode['avg_error'] = sum(episode['error_samples']) / len(episode['error_samples'])
+        episode['samples_count'] = len(episode['accuracy_samples'])
+        
+        # Component-wise accuracy statistics
+        episode['avg_accuracy_x'] = sum(episode['accuracy_x_samples']) / len(episode['accuracy_x_samples'])
+        episode['avg_accuracy_y'] = sum(episode['accuracy_y_samples']) / len(episode['accuracy_y_samples'])
+        episode['avg_accuracy_z'] = sum(episode['accuracy_z_samples']) / len(episode['accuracy_z_samples'])
+        
+        # Component-wise error statistics
+        episode['avg_error_x'] = sum(episode['error_x_samples']) / len(episode['error_x_samples'])
+        episode['avg_error_y'] = sum(episode['error_y_samples']) / len(episode['error_y_samples'])
+        episode['avg_error_z'] = sum(episode['error_z_samples']) / len(episode['error_z_samples'])
+        
+        # Maximum errors per component
+        episode['max_error_x'] = max(episode['error_x_samples'])
+        episode['max_error_y'] = max(episode['error_y_samples'])
+        episode['max_error_z'] = max(episode['error_z_samples'])
+    else:
+        episode['avg_accuracy'] = 0
+        episode['max_accuracy'] = 0
+        episode['min_accuracy'] = 0
+        episode['avg_error'] = 0
+        episode['samples_count'] = 0
+        episode['avg_accuracy_x'] = episode['avg_accuracy_y'] = episode['avg_accuracy_z'] = 0
+        episode['avg_error_x'] = episode['avg_error_y'] = episode['avg_error_z'] = 0
+        episode['max_error_x'] = episode['max_error_y'] = episode['max_error_z'] = 0
+    
+    # Add to episodes list
+    session_tracking['episodes'].append(episode)
+    session_tracking['total_episodes'] += 1
+    session_tracking['scenario_episodes'] += 1
+    
+    # Print episode report with component-wise analysis
+    print(f"\n🎯 EPISODE {episode['episode_number']} COMPLETED")
+    print(f"   Scenario: {episode['scenario'].upper()} | Direction: {episode['direction'].upper()} | Intensity: {episode['intensity'].upper()}")
+    print(f"   Duration: {episode['duration']:.1f}s | Samples: {episode['samples_count']} | Circles: {episode['circles_completed']}")
+    print(f"   📊 OVERALL PERFORMANCE:")
+    print(f"      Accuracy: Avg={episode['avg_accuracy']:.1f}% | Max={episode['max_accuracy']:.1f}% | Min={episode['min_accuracy']:.1f}%")
+    print(f"      3D Error: Avg={episode['avg_error']:.3f}m")
+    print(f"   📍 COMPONENT-WISE ANALYSIS:")
+    print(f"      X-Axis: Accuracy={episode['avg_accuracy_x']:.1f}% | Error={episode['avg_error_x']:.3f}m | Max Error={episode['max_error_x']:.3f}m")
+    print(f"      Y-Axis: Accuracy={episode['avg_accuracy_y']:.1f}% | Error={episode['avg_error_y']:.3f}m | Max Error={episode['max_error_y']:.3f}m")
+    print(f"      Z-Axis: Accuracy={episode['avg_accuracy_z']:.1f}% | Error={episode['avg_error_z']:.3f}m | Max Error={episode['max_error_z']:.3f}m")
+    
+    # Save to file
+    save_episode_data(episode)
+    
+    # Reset for next episode
+    session_tracking['current_episode'] = None
+
+def complete_scenario():
+    """Complete current scenario and generate comprehensive report"""
+    if not session_tracking['episodes']:
+        return
+    
+    import json
+    from datetime import datetime
+    
+    scenario_episodes = [ep for ep in session_tracking['episodes'] 
+                        if ep['scenario'] == session_tracking['current_scenario']]
+    
+    if not scenario_episodes:
+        return
+    
+    # Calculate scenario statistics
+    total_accuracy = sum(ep['avg_accuracy'] for ep in scenario_episodes)
+    total_error = sum(ep['avg_error'] for ep in scenario_episodes)
+    total_circles = sum(ep['circles_completed'] for ep in scenario_episodes)
+    total_duration = sum(ep['duration'] for ep in scenario_episodes)
+    
+    # Calculate component-wise scenario statistics
+    total_accuracy_x = sum(ep['avg_accuracy_x'] for ep in scenario_episodes)
+    total_accuracy_y = sum(ep['avg_accuracy_y'] for ep in scenario_episodes)
+    total_accuracy_z = sum(ep['avg_accuracy_z'] for ep in scenario_episodes)
+    total_error_x = sum(ep['avg_error_x'] for ep in scenario_episodes)
+    total_error_y = sum(ep['avg_error_y'] for ep in scenario_episodes)
+    total_error_z = sum(ep['avg_error_z'] for ep in scenario_episodes)
+    max_error_x = max(ep['max_error_x'] for ep in scenario_episodes)
+    max_error_y = max(ep['max_error_y'] for ep in scenario_episodes)
+    max_error_z = max(ep['max_error_z'] for ep in scenario_episodes)
+    
+    scenario_report = {
+        'scenario': session_tracking['current_scenario'],
+        'episodes_count': len(scenario_episodes),
+        'total_duration': total_duration,
+        'avg_accuracy': total_accuracy / len(scenario_episodes),
+        'avg_error': total_error / len(scenario_episodes),
+        'total_circles': total_circles,
+        'best_episode_accuracy': max(ep['avg_accuracy'] for ep in scenario_episodes),
+        'avg_accuracy_x': total_accuracy_x / len(scenario_episodes),
+        'avg_accuracy_y': total_accuracy_y / len(scenario_episodes),
+        'avg_accuracy_z': total_accuracy_z / len(scenario_episodes),
+        'avg_error_x': total_error_x / len(scenario_episodes),
+        'avg_error_y': total_error_y / len(scenario_episodes),
+        'avg_error_z': total_error_z / len(scenario_episodes),
+        'max_error_x': max_error_x,
+        'max_error_y': max_error_y,
+        'max_error_z': max_error_z,
+        'completion_time': datetime.now().isoformat()
+    }
+    
+    # Print scenario report with component-wise analysis
+    print(f"\n🏆 SCENARIO '{session_tracking['current_scenario'].upper()}' COMPLETED")
+    print(f"   Episodes: {scenario_report['episodes_count']} | Total Duration: {scenario_report['total_duration']:.1f}s | Total Circles: {scenario_report['total_circles']}")
+    print(f"   📊 OVERALL PERFORMANCE:")
+    print(f"      Average Accuracy: {scenario_report['avg_accuracy']:.1f}% | Best Episode: {scenario_report['best_episode_accuracy']:.1f}%")
+    print(f"      Average 3D Error: {scenario_report['avg_error']:.3f}m")
+    print(f"   📍 COMPONENT-WISE ANALYSIS:")
+    print(f"      X-Axis: Accuracy={scenario_report['avg_accuracy_x']:.1f}% | Error={scenario_report['avg_error_x']:.3f}m | Max Error={scenario_report['max_error_x']:.3f}m")
+    print(f"      Y-Axis: Accuracy={scenario_report['avg_accuracy_y']:.1f}% | Error={scenario_report['avg_error_y']:.3f}m | Max Error={scenario_report['max_error_y']:.3f}m")
+    print(f"      Z-Axis: Accuracy={scenario_report['avg_accuracy_z']:.1f}% | Error={scenario_report['avg_error_z']:.3f}m | Max Error={scenario_report['max_error_z']:.3f}m")
+    
+    # Save scenario report
+    save_scenario_report(scenario_report)
+    
+    # Reset scenario tracking
+    session_tracking['scenario_episodes'] = 0
+
+def save_episode_data(episode):
+    """Save episode data to JSON file in archive directory"""
+    import json
+    import os
+    from datetime import datetime
+    
+    # Ensure archive directory exists
+    if not os.path.exists("archives/episode_data"):
+        create_archive_directories()
+    
+    filename = f"archives/episode_data/episode_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    
+    try:
+        with open(filename, 'w') as f:
+            json.dump(episode, f, indent=2)
+        print(f"   💾 Episode data saved: {filename}")
+    except Exception as e:
+        print(f"   ⚠️  Could not save episode data: {e}")
+
+def save_scenario_report(report):
+    """Save scenario report to JSON file in archive directory"""
+    import json
+    import os
+    from datetime import datetime
+    
+    # Ensure archive directory exists
+    if not os.path.exists("archives/scenario_reports"):
+        create_archive_directories()
+    
+    filename = f"archives/scenario_reports/scenario_report_{report['scenario']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    
+    try:
+        with open(filename, 'w') as f:
+            json.dump(report, f, indent=2)
+        print(f"   💾 Scenario report saved: {filename}")
+    except Exception as e:
+        print(f"   ⚠️  Could not save scenario report: {e}")
+
+def save_session_summary():
+    """Save complete session summary to archive"""
+    import json
+    import os
+    from datetime import datetime
+    
+    if not session_tracking['episodes']:
+        print("ℹ️  No session data to archive")
+        return
+    
+    # Ensure archive directory exists
+    if not os.path.exists("archives/session_summaries"):
+        create_archive_directories()
+    
+    # Calculate session statistics
+    session_duration = time.time() - session_tracking['session_start_time']
+    all_episodes = session_tracking['episodes']
+    
+    session_summary = {
+        'session_info': {
+            'total_episodes': session_tracking['total_episodes'],
+            'session_duration': session_duration,
+            'start_time': session_tracking['session_start_time'],
+            'end_time': time.time(),
+            'timestamp': datetime.now().isoformat()
+        },
+        'performance_summary': {
+            'overall_accuracy': sum(ep['avg_accuracy'] for ep in all_episodes) / len(all_episodes),
+            'overall_error': sum(ep['avg_error'] for ep in all_episodes) / len(all_episodes),
+            'total_circles': sum(ep['circles_completed'] for ep in all_episodes),
+            'component_analysis': {
+                'avg_accuracy_x': sum(ep['avg_accuracy_x'] for ep in all_episodes) / len(all_episodes),
+                'avg_accuracy_y': sum(ep['avg_accuracy_y'] for ep in all_episodes) / len(all_episodes), 
+                'avg_accuracy_z': sum(ep['avg_accuracy_z'] for ep in all_episodes) / len(all_episodes),
+                'avg_error_x': sum(ep['avg_error_x'] for ep in all_episodes) / len(all_episodes),
+                'avg_error_y': sum(ep['avg_error_y'] for ep in all_episodes) / len(all_episodes),
+                'avg_error_z': sum(ep['avg_error_z'] for ep in all_episodes) / len(all_episodes)
+            }
+        },
+        'episodes': all_episodes
+    }
+    
+    # Group by scenario for detailed analysis
+    scenarios = {}
+    for episode in all_episodes:
+        scenario = episode['scenario']
+        if scenario not in scenarios:
+            scenarios[scenario] = []
+        scenarios[scenario].append(episode)
+    
+    session_summary['scenario_breakdown'] = {}
+    for scenario, episodes in scenarios.items():
+        session_summary['scenario_breakdown'][scenario] = {
+            'episode_count': len(episodes),
+            'avg_accuracy': sum(ep['avg_accuracy'] for ep in episodes) / len(episodes),
+            'avg_error': sum(ep['avg_error'] for ep in episodes) / len(episodes),
+            'total_circles': sum(ep['circles_completed'] for ep in episodes)
+        }
+    
+    # Save session summary
+    filename = f"archives/session_summaries/session_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    try:
+        with open(filename, 'w') as f:
+            json.dump(session_summary, f, indent=2)
+        print(f"📄 Session summary archived: {filename}")
+        return filename
+    except Exception as e:
+        print(f"❌ Could not save session summary: {e}")
+        return None
+
+def generate_session_summary():
+    """Generate complete session summary"""
+    if not session_tracking['episodes']:
+        print("\n📊 SESSION SUMMARY: No episodes recorded yet")
+        return
+    
+    print(f"\n📊 SESSION SUMMARY")
+    print(f"   Total Episodes: {session_tracking['total_episodes']}")
+    print(f"   Session Duration: {(time.time() - session_tracking['session_start_time']):.1f}s")
+    
+    # Calculate overall session statistics
+    all_episodes = session_tracking['episodes']
+    session_avg_accuracy = sum(ep['avg_accuracy'] for ep in all_episodes) / len(all_episodes)
+    session_avg_error = sum(ep['avg_error'] for ep in all_episodes) / len(all_episodes)
+    session_avg_accuracy_x = sum(ep['avg_accuracy_x'] for ep in all_episodes) / len(all_episodes)
+    session_avg_accuracy_y = sum(ep['avg_accuracy_y'] for ep in all_episodes) / len(all_episodes)
+    session_avg_accuracy_z = sum(ep['avg_accuracy_z'] for ep in all_episodes) / len(all_episodes)
+    session_avg_error_x = sum(ep['avg_error_x'] for ep in all_episodes) / len(all_episodes)
+    session_avg_error_y = sum(ep['avg_error_y'] for ep in all_episodes) / len(all_episodes)
+    session_avg_error_z = sum(ep['avg_error_z'] for ep in all_episodes) / len(all_episodes)
+    
+    print(f"\n   📊 SESSION OVERALL PERFORMANCE:")
+    print(f"      Overall Accuracy: {session_avg_accuracy:.1f}% | Overall 3D Error: {session_avg_error:.3f}m")
+    print(f"   📍 SESSION COMPONENT-WISE ANALYSIS:")
+    print(f"      X-Axis: Accuracy={session_avg_accuracy_x:.1f}% | Error={session_avg_error_x:.3f}m")
+    print(f"      Y-Axis: Accuracy={session_avg_accuracy_y:.1f}% | Error={session_avg_error_y:.3f}m")
+    print(f"      Z-Axis: Accuracy={session_avg_accuracy_z:.1f}% | Error={session_avg_error_z:.3f}m")
+    
+    # Group by scenario
+    scenarios = {}
+    for episode in session_tracking['episodes']:
+        scenario = episode['scenario']
+        if scenario not in scenarios:
+            scenarios[scenario] = []
+        scenarios[scenario].append(episode)
+    
+    print(f"\n   🎯 BY SCENARIO:")
+    for scenario, episodes in scenarios.items():
+        avg_acc = sum(ep['avg_accuracy'] for ep in episodes) / len(episodes)
+        avg_acc_x = sum(ep['avg_accuracy_x'] for ep in episodes) / len(episodes)
+        avg_acc_y = sum(ep['avg_accuracy_y'] for ep in episodes) / len(episodes)
+        avg_acc_z = sum(ep['avg_accuracy_z'] for ep in episodes) / len(episodes)
+        print(f"      {scenario.upper()}: {len(episodes)} episodes")
+        print(f"         Overall: {avg_acc:.1f}% | X: {avg_acc_x:.1f}% | Y: {avg_acc_y:.1f}% | Z: {avg_acc_z:.1f}%")
+    
+    # Save session summary to archive
+    print(f"\n📦 Archiving session summary...")
+    save_session_summary()
 
 # === ALTERNATIVE PATH: SQUARE (COMMENTED OUT) ===
 # To switch back to square path, uncomment below and comment out circular settings above
@@ -1312,61 +1824,55 @@ for i in range(num_waypoints):
 
 def add_circular_path_markers():
     """Add visual markers for circular path waypoints and connections."""
-    if use_waypoints:
-        # Add waypoint markers (small red spheres)
-        for i, waypoint in enumerate(circle_waypoints):
-            world_x = waypoint[0]
-            world_y = waypoint[1]
-            world_z = 0.1  # Slightly above ground
+    try:
+        if use_waypoints:
+            # Add waypoint markers (small red spheres) - use createMultiBody instead of debug items
+            for i, waypoint in enumerate(circle_waypoints):
+                world_x = waypoint[0]
+                world_y = waypoint[1]
+                world_z = 0.1  # Slightly above ground
+                
+                marker_id = p.createVisualShape(p.GEOM_SPHERE, radius=0.05, rgbaColor=[1, 0, 0, 0.8])
+                p.createMultiBody(baseMass=0, baseVisualShapeIndex=marker_id,
+                                 basePosition=[world_x, world_y, world_z])
+                
+                # Reduce waypoint labels to prevent debug overflow
+                if i % 4 == 0:  # Only show every 4th waypoint label
+                    p.addUserDebugText(f"WP{i+1}", [world_x, world_y, world_z + 0.1], 
+                                      textColorRGB=[1, 1, 1], textSize=1.0)
             
-            marker_id = p.createVisualShape(p.GEOM_SPHERE, radius=0.05, rgbaColor=[1, 0, 0, 0.8])
-            p.createMultiBody(baseMass=0, baseVisualShapeIndex=marker_id,
-                             basePosition=[world_x, world_y, world_z])
-            
-            # Add waypoint label
-            p.addUserDebugText(f"WP{i+1}", [world_x, world_y, world_z + 0.1], 
-                              textColorRGB=[1, 1, 1], textSize=1.0)
-        
-        # Add lines connecting waypoints (path segments)
-        for i in range(num_waypoints):
-            start_wp = circle_waypoints[i]
-            end_wp = circle_waypoints[(i + 1) % num_waypoints]  # Next waypoint (wrapping around)
-            
-            start_pos = [start_wp[0], start_wp[1], 0.05]
-            end_pos = [end_wp[0], end_wp[1], 0.05]
-            
-            # Add debug line (blue color)
-            p.addUserDebugLine(start_pos, end_pos, lineColorRGB=[0, 0, 1], lineWidth=3.0)
-    else:
-        # For smooth circular motion, draw a complete circle
-        num_segments = 32
-        for i in range(num_segments):
-            angle1 = (2 * math.pi * i) / num_segments
-            angle2 = (2 * math.pi * (i + 1)) / num_segments
-            
-            x1 = circle_center[0] + circle_radius * math.cos(angle1)
-            y1 = circle_center[1] + circle_radius * math.sin(angle1)
-            x2 = circle_center[0] + circle_radius * math.cos(angle2)
-            y2 = circle_center[1] + circle_radius * math.sin(angle2)
-            
-            # Add debug line (blue color)
-            p.addUserDebugLine([x1, y1, 0.05], [x2, y2, 0.05], lineColorRGB=[0, 0, 1], lineWidth=3.0)
+            # Add fewer connecting lines to reduce debug items
+            step = max(1, num_waypoints // 8)  # Show only 8 connecting lines maximum
+            for i in range(0, num_waypoints, step):
+                start_wp = circle_waypoints[i]
+                end_wp = circle_waypoints[(i + step) % num_waypoints]
+                
+                start_pos = [start_wp[0], start_wp[1], 0.05]
+                end_pos = [end_wp[0], end_wp[1], 0.05]
+                
+                p.addUserDebugLine(start_pos, end_pos, lineColorRGB=[0, 0, 1], lineWidth=2.0)
+        else:
+            # For smooth circular motion, draw fewer circle segments
+            num_segments = 12  # Reduced from 32 to prevent debug overflow
+            for i in range(num_segments):
+                angle1 = (2 * math.pi * i) / num_segments
+                angle2 = (2 * math.pi * (i + 1)) / num_segments
+                
+                x1 = circle_center[0] + circle_radius * math.cos(angle1)
+                y1 = circle_center[1] + circle_radius * math.sin(angle1)
+                x2 = circle_center[0] + circle_radius * math.cos(angle2)
+                y2 = circle_center[1] + circle_radius * math.sin(angle2)
+                
+                p.addUserDebugLine([x1, y1, 0.05], [x2, y2, 0.05], lineColorRGB=[0, 0, 1], lineWidth=2.0)
+    except Exception as e:
+        print(f"Warning: Could not create trajectory markers: {e}")
+        # Continue without trajectory visualization
     
-    # Add center marker (green sphere)
-    center_x = circle_center[0]
-    center_y = circle_center[1]
-    center_z = 0.05
-    
-    center_marker_id = p.createVisualShape(p.GEOM_SPHERE, radius=0.03, rgbaColor=[0, 1, 0, 0.8])
-    p.createMultiBody(baseMass=0, baseVisualShapeIndex=center_marker_id,
-                     basePosition=[center_x, center_y, center_z])
-    
-    p.addUserDebugText("CENTER", [center_x, center_y, center_z + 0.08], 
-                      textColorRGB=[0, 1, 0], textSize=0.8)
+    # Center marker removed - was confusing as it appeared near ground
     
     # Print path information
     print("\n=== Circular Path Configuration ===")
-    print(f"Circular path: radius={circle_radius}m, center=({center_x:.2f}, {center_y:.2f})")
+    print(f"Circular path: radius={circle_radius}m, center=({circle_center[0]:.2f}, {circle_center[1]:.2f})")
     if use_waypoints:
         print(f"Waypoint-based navigation: {len(circle_waypoints)} waypoints")
         for i, wp in enumerate(circle_waypoints[:4]):  # Show first 4 waypoints
@@ -1380,6 +1886,52 @@ def add_circular_path_markers():
 # Add visual path markers (circular path and connections)
 add_circular_path_markers()
 
+# === RL TRAJECTORY VISUALIZATION ===
+def add_rl_trajectory_markers():
+    """Add visual markers for RL training trajectory - smooth circular path."""
+    if RL_AVAILABLE:
+        print("Adding RL trajectory markers...")
+        
+        # Generate circular trajectory points for visualization
+        trajectory_radius = 0.2  # Same radius as RL target and autonomous manipulator
+        num_visual_points = 20   # Reasonable number of visual points
+        
+        smooth_points = []
+        for i in range(num_visual_points):
+            phase = 2 * math.pi * i / num_visual_points
+            x = circle_center[0] + trajectory_radius * math.cos(phase)
+            y = circle_center[1] + trajectory_radius * math.sin(phase)
+            z = 0.7 + 0.1 * math.sin(phase * 2)  # Same Z pattern as RL target
+            smooth_points.append([x, y, z])
+        
+        # Create visual markers for circular trajectory
+        for i, point in enumerate(smooth_points):
+            # Create small waypoint markers
+            marker_id = p.createVisualShape(p.GEOM_SPHERE, radius=0.015, rgbaColor=[0, 1, 0, 0.7])
+            marker_body = p.createMultiBody(baseVisualShapeIndex=marker_id, 
+                                          basePosition=[point[0], point[1], point[2]])
+            
+            # Add line connections for smooth trajectory visualization
+            if i > 0:
+                prev_point = smooth_points[i-1]
+                p.addUserDebugLine([prev_point[0], prev_point[1], prev_point[2]], 
+                                 [point[0], point[1], point[2]], 
+                                 lineColorRGB=[0, 1, 0], lineWidth=1.5)
+        
+        # Close the smooth trajectory loop
+        if len(smooth_points) > 2:
+            last_point = smooth_points[-1]
+            first_point = smooth_points[0]
+            p.addUserDebugLine([last_point[0], last_point[1], last_point[2]], 
+                             [first_point[0], first_point[1], first_point[2]], 
+                             lineColorRGB=[0, 1, 0], lineWidth=1.5)
+        
+        print(f"✅ Added smooth circular trajectory: {num_visual_points} visual points, radius={trajectory_radius}m")
+
+# Add RL trajectory visualization
+if RL_AVAILABLE:
+    add_rl_trajectory_markers()
+
 # === ALTERNATIVE: SQUARE PATH MARKERS ===
 # To switch to square path, comment out the line above and uncomment the line below
 # add_square_path_markers()
@@ -1391,14 +1943,14 @@ print("Virtual IMU sensors monitor base and arm motion with realistic noise")
 print("")
 print("CONTROLS:")
 print("  'm' - Toggle autonomous mode on/off")
-print("  'r' - Reset to start position") 
+print("  'r' - Restart simulation (full reset)") 
 print("  'i' - Display immediate IMU readings")
 print("  'p' - Apply manual perturbation (test IMU response)")
 print("  'v' - Start/stop video recording (30s max)")
 print("  'p' - Capture screenshot (organized in photos/ folder)")
 print("  'c' - Change camera angle (when not recording)")
 print("  'x' - Quick test recording (10 seconds)")
-print("  DISTURBANCE SCENARIOS:")
+print("  DISTURBANCE SCENARIOS (auto-restart on change):")
 print("    '1' - NONE scenario (no disturbances)")
 print("    '2' - RANDOM scenario (continuous noise ±50N)")
 print("    '3' - PERIODIC scenario (impacts every 50 steps ±100N)")
@@ -1413,13 +1965,21 @@ print("    'Y' - intensitY/Golden intensity (φ = 1.61803x forces - Golden ratio
 
 if RL_AVAILABLE:
     print("  RL TRAJECTORY PLANNER:")
-    print("    't' - Toggle RL training mode (Q-learning/DQN)")
+    print("    't' - Toggle RL training mode (Circular trajectory following)")
     print("    'e' - Toggle RL execution mode (run learned policy)")
     print("    'l' - Load saved RL model")
     print("    'q' - Test disturbance rejection capability")
     if TRAIN_BOTH_ALGORITHMS:
         print("    'k' - Switch between DQN and Q-Learning algorithms")
 
+print("  EPISODE & SCENARIO TRACKING (Auto-archived):")
+print("    'z' - Complete current episode and save report")
+print("    'h' - Complete current scenario and save comprehensive report") 
+print("    'j' - Generate complete session summary and archive")
+print("  DATA MANAGEMENT:")
+print("    'a' - Display archive inventory and statistics")
+print("    Archives automatically saved to archives/ directory")
+print("    Episode data, scenario reports, and session summaries preserved")
 print("  Arrow keys - Manual control (when autonomous off)")
 print("")
 print("FEATURES:")
@@ -1445,6 +2005,37 @@ if RL_AVAILABLE:
 print("=============================================================")
 
 while 1:
+  # === SIMULATION RESTART CHECK ===
+  if restart_simulation:
+    print(f"\n🔄 RESTARTING SIMULATION: {restart_reason}")
+    
+    # Reset robot state first
+    reset_robot_state()
+    
+    # Clear all debug items to prevent visual artifacts
+    try:
+      p.removeAllUserDebugItems()
+      time.sleep(0.005)  # Brief delay for cleanup
+    except:
+      pass
+    
+    # Reset episode tracking if active
+    if session_tracking['current_episode'] is not None:
+      print("   📊 Episode tracking reset due to restart")
+      session_tracking['current_episode'] = None
+    
+    # Reset trajectory visualization
+    try:
+      add_circular_path_markers()
+    except:
+      pass
+    
+    # Clear restart flag
+    restart_simulation = False
+    restart_reason = ""
+    
+    print("✅ Simulation restart completed\n")
+  
   # === IMU SENSOR UPDATES ===
   # Read IMU data from both sensors every frame for real-time feedback
   husky_imu_data = husky_imu.read_imu()
@@ -1488,12 +2079,33 @@ while 1:
     if ord('d') in keys:
       basepos = basepos = [basepos[0], basepos[1] + shift, basepos[2]]
     if ord('m') in keys:
-      autonomous_mode = not autonomous_mode
-      print(f"Autonomous square path mode: {'ENABLED' if autonomous_mode else 'DISABLED'}")
+      # Add cooldown protection for 'm' key
+      current_time = time.time()
+      if current_time - last_key_press_time.get('m', 0) > key_cooldown:
+        last_key_press_time['m'] = current_time
+        autonomous_mode = not autonomous_mode
+        print(f"🔄 Mode switched: {'AUTONOMOUS' if autonomous_mode else 'MANUAL'}")
+        
+        # Force immediate visual status update with error handling
+        try:
+          p.removeAllUserDebugItems()
+          time.sleep(0.002)  # Small delay to prevent conflicts
+          
+          if autonomous_mode:
+            p.addUserDebugText("AUTONOMOUS MODE", textPosition=[0, 0, 2], textColorRGB=[1, 0.5, 0], textSize=1.5)
+            p.addUserDebugText("Following circular path", textPosition=[0, 0, 1.5], textColorRGB=[1, 1, 1], textSize=1.0)
+          else:
+            p.addUserDebugText("MANUAL MODE", textPosition=[0, 0, 2], textColorRGB=[0.5, 0.5, 0.5], textSize=1.5)
+            p.addUserDebugText("Press 't' to train or 'm' for autonomous", textPosition=[0, 0, 1.5], textColorRGB=[1, 1, 1], textSize=1.0)
+        except:
+          pass  # Fail silently if debug items can't be updated
     if ord('r') in keys:
-      current_waypoint = 0
-      path_completed_laps = 0
-      print("Reset to waypoint 1")
+      # Add cooldown protection for 'r' key
+      current_time = time.time()
+      if current_time - last_key_press_time.get('r', 0) > key_cooldown:
+        last_key_press_time['r'] = current_time
+        request_simulation_restart("Manual restart (R key)")
+        print("🔄 Manual restart requested")
     if ord('x') in keys:
       # Test recording - auto start a 10 second recording
       if not video_recorder.is_recording:
@@ -1552,16 +2164,68 @@ while 1:
         video_recorder.set_camera_angle(distance, yaw, pitch)
       else:
         print("📷 Cannot change camera angle while recording")
-    if ord('t') in keys and RL_AVAILABLE:
-      # Toggle RL training mode
-      rl_training_mode = not rl_training_mode
-      if rl_training_mode:
-        rl_execution_mode = False
-        autonomous_mode = False  # Disable regular autonomous mode
-        print("🎓 RL TRAINING MODE ENABLED - Agent will learn trajectory following")
-        print("   Press 't' again to stop training")
-      else:
-        print("🎓 RL TRAINING MODE DISABLED")
+    if ord('z') in keys:
+      # Complete current episode and generate report
+      complete_episode()
+    if ord('h') in keys:
+      # Complete current scenario and generate comprehensive report  
+      complete_scenario()
+    if ord('j') in keys:
+      # Generate complete session summary
+      generate_session_summary()
+    if ord('a') in keys:
+      # Display archive inventory
+      list_archives()
+    if ord('t') in keys:
+      current_time = time.time()
+      if current_time - last_key_press_time.get('t', 0) > key_cooldown:
+        last_key_press_time['t'] = current_time
+        print(f"🔍 DEBUG: 't' key detected! RL_AVAILABLE={RL_AVAILABLE}")
+        if RL_AVAILABLE:
+          # Toggle RL training mode
+          rl_training_mode = not rl_training_mode
+          print(f"🔄 DEBUG: rl_training_mode toggled to {rl_training_mode}")
+          if rl_training_mode:
+            rl_execution_mode = False
+            autonomous_mode = False  # Disable regular autonomous mode
+            
+            # Force stop all wheel movement from autonomous mode
+            wheelVelocities = [0, 0, 0, 0]  # Reset autonomous wheel velocities
+            for i in range(len(wheels)):
+              p.setJointMotorControl2(husky, wheels[i], p.VELOCITY_CONTROL, targetVelocity=0, force=300)
+            
+            # Archive any existing data before starting new training
+            print("📦 Archiving existing episode data...")
+            archive_existing_data()
+            
+            rl_start_time = time.time()  # Initialize training start time
+            print("🎓 RL TRAINING STARTED ✅")
+            print("   Robot will learn trajectory following")
+            
+            # Force immediate visual status update with error handling
+            try:
+              p.removeAllUserDebugItems()
+              time.sleep(0.002)  # Small delay to prevent conflicts
+              p.addUserDebugText("RL TRAINING ACTIVE", textPosition=[0, 0, 2], textColorRGB=[0, 1, 0], textSize=1.5)
+              p.addUserDebugText("Robot learning trajectory following", textPosition=[0, 0, 1.5], textColorRGB=[1, 1, 1], textSize=1.0)
+            except:
+              pass  # Fail silently if debug items can't be updated
+          else:
+            # Stop robot movement when disabling RL training
+            for i in range(len(wheels)):
+              p.setJointMotorControl2(husky, wheels[i], p.VELOCITY_CONTROL, targetVelocity=0, force=500)
+            print("🎓 RL TRAINING STOPPED ❌")
+            
+            # Force immediate visual status update with error handling
+            try:
+              p.removeAllUserDebugItems()
+              time.sleep(0.002)  # Small delay to prevent conflicts
+              p.addUserDebugText("MANUAL MODE", textPosition=[0, 0, 2], textColorRGB=[0.5, 0.5, 0.5], textSize=1.5)
+              p.addUserDebugText("Press 't' to train or 'm' for autonomous", textPosition=[0, 0, 1.5], textColorRGB=[1, 1, 1], textSize=1.0)
+            except:
+              pass  # Fail silently if debug items can't be updated
+        else:
+          print("❌ RL not available - cannot toggle training mode")
     if ord('e') in keys and RL_AVAILABLE:
       # Toggle RL execution mode
       rl_execution_mode = not rl_execution_mode
@@ -1617,20 +2281,35 @@ while 1:
     
     # === DISTURBANCE SCENARIO CONTROLS ===
     if ord('1') in keys:
-      # Switch to NONE scenario
-      disturbance_manager.set_scenario("none")
+      # Switch to NONE scenario with cooldown protection
+      current_time = time.time()
+      if current_time - last_key_press_time.get('1', 0) > key_cooldown:
+        last_key_press_time['1'] = current_time
+        disturbance_manager.set_scenario("none")
     if ord('2') in keys:
-      # Switch to RANDOM scenario
-      disturbance_manager.set_scenario("random")
+      # Switch to RANDOM scenario with cooldown protection
+      current_time = time.time()
+      if current_time - last_key_press_time.get('2', 0) > key_cooldown:
+        last_key_press_time['2'] = current_time
+        disturbance_manager.set_scenario("random")
     if ord('3') in keys:
-      # Switch to PERIODIC scenario
-      disturbance_manager.set_scenario("periodic")
+      # Switch to PERIODIC scenario with cooldown protection
+      current_time = time.time()
+      if current_time - last_key_press_time.get('3', 0) > key_cooldown:
+        last_key_press_time['3'] = current_time
+        disturbance_manager.set_scenario("periodic")
     if ord('4') in keys:
-      # Switch to CONTINUOUS scenario
-      disturbance_manager.set_scenario("continuous")
+      # Switch to CONTINUOUS scenario with cooldown protection
+      current_time = time.time()
+      if current_time - last_key_press_time.get('4', 0) > key_cooldown:
+        last_key_press_time['4'] = current_time
+        disturbance_manager.set_scenario("continuous")
     if ord('5') in keys:
-      # Switch to IMPULSE scenario
-      disturbance_manager.set_scenario("impulse")
+      # Switch to IMPULSE scenario with cooldown protection
+      current_time = time.time()
+      if current_time - last_key_press_time.get('5', 0) > key_cooldown:
+        last_key_press_time['5'] = current_time
+        disturbance_manager.set_scenario("impulse")
     
     # === DIRECTIONAL MODE CONTROLS ===
     if ord('n') in keys:
@@ -1669,7 +2348,7 @@ while 1:
       if status['current_scenario'] == 'impulse':
         impulse_status = "APPLIED" if status['impulse_applied'] else "PENDING"
         print(f"   Impulse Status: {impulse_status}")
-      print(f"   Scenario Controls: Press 1-5 to switch scenarios")
+      print(f"   Scenario Controls: Press 1-5 to switch scenarios (triggers restart)")
       print(f"   Direction Controls: Press N/F/G/U/J for directional modes")
       print(f"     N=raNdom, F=Forward, G=Going sideways, U=Up/vertical, J=Jerk")
       print(f"   Intensity Controls: Press O/Y for intensity modes")
@@ -1727,14 +2406,55 @@ while 1:
     if rl_step_counter == 0:
       rl_state = rl_env.reset()
       rl_env.current_disturbance = scenario
+      # Reset smooth circular trajectory tracking for new episode
+      rl_trajectory_phase = 0.0
+      
+      # Calculate initial smooth circular target position
+      trajectory_radius = 0.2  # Same radius as autonomous manipulator
+      target_x = circle_center[0] + trajectory_radius * math.cos(rl_trajectory_phase)
+      target_y = circle_center[1] + trajectory_radius * math.sin(rl_trajectory_phase)
+      target_z = 0.7 + 0.1 * math.sin(rl_trajectory_phase * 2)
+      
+      rl_env.goal_pose = np.array([target_x, target_y, target_z, 0, 0, 0])
+      
+      # Stop any existing wheel movement for clean start
+      for i in range(len(wheels)):
+        p.setJointMotorControl2(husky, wheels[i], p.VELOCITY_CONTROL, targetVelocity=0, force=300)
+      
       # Synchronize disturbance manager with RL training scenario and intensity
       disturbance_manager.set_scenario(scenario)
       disturbance_manager.set_intensity_mode(intensity)
       
       intensity_symbol = "⚡" if intensity == "golden" else "📊"
       intensity_factor = disturbance_manager.intensity_modes[intensity]["factor"]
-      print(f"\n[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} ({intensity_factor}x) - Episode {rl_current_episode + 1}/{rl_num_episodes}")
-      print(f"🌪️  Scenario: {scenario.upper()} | Intensity: {intensity.upper()} | Combination {rl_current_combination_idx + 1}/{len(rl_training_combinations)}")
+      print(f"\n🎯 Episode {rl_current_episode + 1}/{rl_num_episodes} | Scenario: {scenario.upper()}")
+    
+    # Update trajectory with smooth circular motion (matching autonomous pattern)
+    if rl_step_counter % rl_trajectory_update_steps == 0:
+      # Increment phase for smooth circular trajectory
+      rl_trajectory_phase += 0.3  # Advance phase for next target
+      if rl_trajectory_phase >= 2 * math.pi:
+        rl_trajectory_phase -= 2 * math.pi
+        print("🔄 Completed full circular trajectory!")
+      
+      # Calculate smooth circular target position (matching autonomous manipulator)
+      trajectory_radius = 0.2  # Same radius as autonomous manipulator
+      target_x = circle_center[0] + trajectory_radius * math.cos(rl_trajectory_phase)
+      target_y = circle_center[1] + trajectory_radius * math.sin(rl_trajectory_phase)
+      target_z = 0.7 + 0.1 * math.sin(rl_trajectory_phase * 2)  # Same Z pattern as autonomous
+      
+      rl_env.goal_pose = np.array([target_x, target_y, target_z, 0, 0, 0])
+      print(f"🎯 Target: Smooth circular position (phase: {rl_trajectory_phase:.2f})")
+      
+      # Add visual marker for current target position (less frequent updates to avoid warnings)
+      if int(t * 240) % 60 == 0:  # Update target marker every 0.25 seconds instead of every frame
+        try:
+          target_pos = [target_x, target_y, target_z]
+          # Add bright red sphere marker (no text to reduce debug items)
+          p.addUserDebugText("●", textPosition=[target_pos[0], target_pos[1], target_pos[2]], 
+                             textColorRGB=[1, 0, 0], textSize=2.0)
+        except:
+          pass  # Fail silently if target marker can't be added
     
     # Execute one RL step per simulation frame
     rl_action = rl_agent.select_action(rl_state)
@@ -1742,6 +2462,39 @@ while 1:
     rl_agent.update(rl_state, rl_action, rl_reward, rl_next_state)
     rl_state = rl_next_state
     rl_step_counter += 1
+    
+    # Apply RL wheel commands safely (avoids control conflicts)
+    if hasattr(rl_env, 'rl_wheel_commands') and rl_env.rl_wheel_commands.get('active', False):
+      rl_wheel_cmd = rl_env.rl_wheel_commands
+      angle_diff = rl_wheel_cmd['angle_diff']
+      forward_speed = rl_wheel_cmd['forward_speed']
+      turn_speed = rl_wheel_cmd['turn_speed']
+      
+      # Apply RL wheel control with same logic as autonomous mode
+      rl_wheelVelocities = [0] * len(wheels)
+      angle_threshold = 0.2
+      
+      if abs(angle_diff) > angle_threshold:
+        turn_direction = 1 if angle_diff > 0 else -1
+        for i in range(len(wheels)):
+          rl_wheelVelocities[i] = turn_direction * turn_speed * wheelDeltasTurn[i]
+      else:
+        turn_correction = angle_diff * 0.3
+        for i in range(len(wheels)):
+          rl_wheelVelocities[i] = forward_speed * wheelDeltasFwd[i] + turn_correction * wheelDeltasTurn[i]
+      
+      # Apply RL wheel velocities
+      for i in range(len(wheels)):
+        p.setJointMotorControl2(husky, wheels[i], p.VELOCITY_CONTROL,
+                                targetVelocity=rl_wheelVelocities[i], force=300,  # Reduced force for stability
+                                positionGain=0.1, velocityGain=1.0, maxVelocity=5.0)  # Reduced max velocity
+      
+      # Reset command after applying
+      rl_env.rl_wheel_commands['active'] = False
+    
+    # Simple progress update
+    if rl_step_counter % 100 == 0:  # Every 100 steps
+      print(f"📈 Episode Progress: Step {rl_step_counter}/200 | Reward: {rl_reward:.2f}")
     
     # Track energy (use combined scenario-intensity key)
     combo_key = f"{scenario}_{intensity}"
@@ -1756,14 +2509,16 @@ while 1:
       
       if rl_done:
         rl_metrics[combo_key]['success'] += 1
-        print(f"[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} Episode {rl_current_episode + 1} SUCCESS: steps={rl_step_counter}, error={final_error:.3f}, energy={ep_energy}")
+        trajectory_progress = (rl_trajectory_phase / (2 * math.pi)) * 100  # Phase-based progress
+        print(f"[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} Episode {rl_current_episode + 1} SUCCESS: steps={rl_step_counter}, error={final_error:.3f}m, trajectory={trajectory_progress:.1f}%, energy={ep_energy}")
         
         # Capture screenshot for successful episodes (every 10th success)
         success_count = rl_metrics[combo_key]['success']
         if success_count % 10 == 0:  # Only capture every 10th success to avoid too many photos
           photo_manager.capture_training_screenshot(scenario, rl_current_episode + 1, rl_current_algorithm)
       else:
-        print(f"[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} Episode {rl_current_episode + 1} TIMEOUT: steps={rl_step_counter}, error={final_error:.3f}, energy={ep_energy}")
+        trajectory_progress = (rl_trajectory_phase / (2 * math.pi)) * 100  # Phase-based progress
+        print(f"[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} Episode {rl_current_episode + 1} TIMEOUT: steps={rl_step_counter}, error={final_error:.3f}m, trajectory={trajectory_progress:.1f}%, energy={ep_energy}")
       
       rl_metrics[combo_key]['errors'].append(final_error)
       rl_metrics[combo_key]['steps'].append(rl_step_counter)
@@ -1944,8 +2699,20 @@ while 1:
         rl_execution_mode = False
   
   # Autonomous circular path navigation
+  # Show training status occasionally (simplified)
+  if int(t * 60) % 600 == 0:  # Every 10 seconds
+    if rl_training_mode:
+      print("🤖 RL Training Active - Learning trajectory following...")
+    elif autonomous_mode:
+      print("🔄 Autonomous Mode - Following circular path...")
+    else:
+      print("⏸️  Manual Mode - Robot idle")
+  
   if autonomous_mode and not rl_training_mode and not rl_execution_mode:
     robot_pos, robot_orn = p.getBasePositionAndOrientation(husky)
+    # Debug: This should NOT print during RL training
+    if int(t * 60) % 300 == 0:  # Every 5 seconds
+      print(f"🔄 DEBUG: Autonomous navigation active (condition satisfied)")
     
     if use_waypoints:
         # Waypoint-based circular navigation
@@ -2005,7 +2772,7 @@ while 1:
     gyro_magnitude = np.linalg.norm(husky_gyro)
     
     # Stability thresholds (accounting for gravity ~9.81 m/s²)
-    max_stable_accel = 5.0   # m/s² - above gravity indicates disturbance  
+    max_stable_accel = 12.0   # m/s² - significantly above gravity indicates disturbance  
     max_stable_gyro = 0.5     # rad/s - above this indicates spinning
     
     # Adjust control gains based on IMU feedback
@@ -2060,33 +2827,200 @@ while 1:
 #       else:
 #         print(f"Reached waypoint {current_waypoint + 1}")
     
-    if abs(angle_diff) > angle_threshold:
-      # Turn towards target with IMU-based stability control
-      turn_direction = 1 if angle_diff > 0 else -1
-      adjusted_speed = autonomous_speed * stability_factor
-      for i in range(len(wheels)):
-        wheelVelocities[i] = turn_direction * adjusted_speed * wheelDeltasTurn[i]
-    else:
-      # Move forward with steering correction and IMU stability
-      forward_speed = autonomous_speed * stability_factor
-      turn_correction = angle_diff * 0.3 * stability_factor  # IMU-adjusted steering
-      
-      for i in range(len(wheels)):
-        wheelVelocities[i] = forward_speed * wheelDeltasFwd[i] + turn_correction * wheelDeltasTurn[i]
+    # Double-check: Only calculate wheel velocities if truly in autonomous mode
+    if not rl_training_mode and not rl_execution_mode:
+      if abs(angle_diff) > angle_threshold:
+        # Turn towards target with IMU-based stability control
+        turn_direction = 1 if angle_diff > 0 else -1
+        adjusted_speed = autonomous_speed * stability_factor
+        for i in range(len(wheels)):
+          wheelVelocities[i] = turn_direction * adjusted_speed * wheelDeltasTurn[i]
+      else:
+        # Move forward with steering correction and IMU stability
+        forward_speed = autonomous_speed * stability_factor
+        turn_correction = angle_diff * 0.3 * stability_factor  # IMU-adjusted steering
+        
+        for i in range(len(wheels)):
+          wheelVelocities[i] = forward_speed * wheelDeltasFwd[i] + turn_correction * wheelDeltasTurn[i]
 
-  baseorn = p.getQuaternionFromEuler([0, 0, ang])
-  for i in range(len(wheels)):
-    # Enhanced wheel motor control with realistic parameters
-    p.setJointMotorControl2(husky,
-                            wheels[i],
-                            p.VELOCITY_CONTROL,
-                            targetVelocity=wheelVelocities[i],
-                            force=500,              # Reduced force for more realistic motion
-                            positionGain=0.1,       # Lower position gain
-                            velocityGain=1.0,       # Higher velocity gain for speed control
-                            maxVelocity=10.0)       # Max wheel velocity (rad/s)
+  # Apply autonomous wheel control (RL system handles its own wheel control in the environment)
+  if autonomous_mode and not rl_training_mode and not rl_execution_mode:
+    baseorn = p.getQuaternionFromEuler([0, 0, ang])
+    for i in range(len(wheels)):
+      # Enhanced wheel motor control with realistic parameters
+      p.setJointMotorControl2(husky,
+                              wheels[i],
+                              p.VELOCITY_CONTROL,
+                              targetVelocity=wheelVelocities[i],
+                              force=500,              # Reduced force for more realistic motion
+                              positionGain=0.1,       # Lower position gain
+                              velocityGain=1.0,       # Higher velocity gain for speed control
+                              maxVelocity=10.0)       # Max wheel velocity (rad/s)
   
-  # Display status every 5 seconds
+  # === VISUAL STATUS OVERLAY ON SIMULATION SCREEN ===
+  # Add text overlays to show training status (with error handling)
+  try:
+    # Update every frame for immediate response to mode changes
+    if True:
+      # Determine current mode and status
+      if rl_training_mode:
+        status_text = "RL TRAINING ACTIVE"
+        status_color = [0, 1, 0]  # Green
+        if 'rl_current_episode' in locals() and rl_current_episode >= 0:
+          episode_info = f"Episode: {rl_current_episode + 1}"
+          if 'rl_step_counter' in locals():
+            progress_info = f"Step: {rl_step_counter}"
+          else:
+            progress_info = ""
+        else:
+          episode_info = "Starting..."
+          progress_info = ""
+      elif rl_execution_mode:
+        status_text = "RL EXECUTION MODE"
+        status_color = [0, 0, 1]  # Blue
+        episode_info = "Executing policy"
+        progress_info = ""
+      elif autonomous_mode:
+        status_text = "AUTONOMOUS MODE"
+        status_color = [1, 0.5, 0]  # Orange
+        episode_info = "Circular path"
+        progress_info = ""
+      else:
+        status_text = "MANUAL MODE"
+        status_color = [0.5, 0.5, 0.5]  # Gray
+        episode_info = "Press 't' to train"
+        
+        # Calculate trajectory accuracy for manual mode
+        try:
+          # Get current end-effector position
+          ee_state = p.getLinkState(kukaId, kukaEndEffectorIndex)
+          current_ee_pos = ee_state[0]
+          
+          # Calculate ideal circular trajectory position at current time
+          trajectory_radius = 0.2
+          ideal_pos = [
+            circle_center[0] + trajectory_radius * math.cos(t),
+            circle_center[1] + trajectory_radius * math.sin(t),
+            0.7 + 0.1 * math.sin(t * 2)
+          ]
+          
+          # Calculate component-wise errors (X, Y, Z)
+          error_x = abs(current_ee_pos[0] - ideal_pos[0])
+          error_y = abs(current_ee_pos[1] - ideal_pos[1]) 
+          error_z = abs(current_ee_pos[2] - ideal_pos[2])
+          
+          # Calculate total 3D distance error
+          distance_error = math.sqrt(
+            (current_ee_pos[0] - ideal_pos[0])**2 +
+            (current_ee_pos[1] - ideal_pos[1])**2 +
+            (current_ee_pos[2] - ideal_pos[2])**2
+          )
+          
+          # Calculate component-wise accuracy percentages
+          max_expected_error = 0.3  # Maximum reasonable error distance
+          max_expected_error_component = 0.15  # Maximum reasonable error per axis
+          
+          accuracy_percent = max(0, (1 - distance_error / max_expected_error) * 100)
+          accuracy_x = max(0, (1 - error_x / max_expected_error_component) * 100)
+          accuracy_y = max(0, (1 - error_y / max_expected_error_component) * 100)
+          accuracy_z = max(0, (1 - error_z / max_expected_error_component) * 100)
+          
+          # Track circle completion and accuracy
+          current_phase = t % (2 * math.pi)  # Current phase in the circle (0 to 2π)
+          
+          # Start tracking when we're at the beginning of a circle
+          if not circle_completion_tracking['is_tracking'] and current_phase < 0.5:
+            circle_completion_tracking['is_tracking'] = True
+            circle_completion_tracking['start_phase'] = current_phase
+            circle_completion_tracking['accuracy_samples'] = []
+            circle_completion_tracking['error_samples'] = []
+          
+          # Collect samples during circle tracking
+          if circle_completion_tracking['is_tracking']:
+            circle_completion_tracking['accuracy_samples'].append(accuracy_percent)
+            circle_completion_tracking['error_samples'].append(distance_error)
+            
+            # Check if we completed a full circle (phase wrapped around)
+            if current_phase < 0.5 and len(circle_completion_tracking['accuracy_samples']) > 100:  # Ensure we have enough samples
+              # Calculate circle completion accuracy
+              avg_accuracy = sum(circle_completion_tracking['accuracy_samples']) / len(circle_completion_tracking['accuracy_samples'])
+              avg_error = sum(circle_completion_tracking['error_samples']) / len(circle_completion_tracking['error_samples'])
+              
+              # Update tracking statistics
+              circle_completion_tracking['completed_circles'] += 1
+              circle_completion_tracking['last_completion_accuracy'] = avg_accuracy
+              circle_completion_tracking['best_accuracy'] = max(circle_completion_tracking['best_accuracy'], avg_accuracy)
+              
+              # Calculate overall average accuracy
+              all_circles = circle_completion_tracking['completed_circles']
+              old_avg = circle_completion_tracking['average_accuracy']
+              circle_completion_tracking['average_accuracy'] = ((old_avg * (all_circles - 1)) + avg_accuracy) / all_circles
+              
+              # Print circle completion summary
+              print(f"🎯 CIRCLE COMPLETED #{circle_completion_tracking['completed_circles']}:")
+              print(f"   Average Accuracy: {avg_accuracy:.1f}%")
+              print(f"   Average Error: {avg_error:.3f}m")
+              print(f"   Best Circle: {circle_completion_tracking['best_accuracy']:.1f}%")
+              print(f"   Overall Average: {circle_completion_tracking['average_accuracy']:.1f}%")
+              
+              # Reset for next circle
+              circle_completion_tracking['is_tracking'] = False
+          
+          # Store accuracy data for episode tracking
+          if not autonomous_mode and not rl_training_mode:
+            # Initialize episode if not already started
+            if session_tracking['current_episode'] is None:
+              session_tracking['current_episode'] = {
+                'start_time': time.time(),
+                'scenario': disturbance_manager.current_scenario,
+                'direction': disturbance_manager.directional_mode,
+                'intensity': disturbance_manager.intensity_mode,
+                'accuracy_samples': [],
+                'error_samples': [],
+                'accuracy_x_samples': [],
+                'accuracy_y_samples': [],
+                'accuracy_z_samples': [],
+                'error_x_samples': [],
+                'error_y_samples': [],
+                'error_z_samples': [],
+                'circles_completed': 0,
+                'episode_number': session_tracking['total_episodes'] + 1
+              }
+              session_tracking['current_scenario'] = disturbance_manager.current_scenario
+              session_tracking['scenario_start_time'] = time.time()
+            
+            # Collect data during episode (both overall and component-wise)
+            if session_tracking['current_episode'] is not None:
+              session_tracking['current_episode']['accuracy_samples'].append(accuracy_percent)
+              session_tracking['current_episode']['error_samples'].append(distance_error)
+              session_tracking['current_episode']['accuracy_x_samples'].append(accuracy_x)
+              session_tracking['current_episode']['accuracy_y_samples'].append(accuracy_y)
+              session_tracking['current_episode']['accuracy_z_samples'].append(accuracy_z)
+              session_tracking['current_episode']['error_x_samples'].append(error_x)
+              session_tracking['current_episode']['error_y_samples'].append(error_y)
+              session_tracking['current_episode']['error_z_samples'].append(error_z)
+              session_tracking['current_episode']['circles_completed'] = circle_completion_tracking['completed_circles']
+        except:
+          pass
+      
+      # Clean simulation - minimal debug items to prevent warnings
+      if int(t * 240) % 600 == 0:  # Clean and update debug items every 2.5 seconds
+        try:
+          p.removeAllUserDebugItems()
+          # Wait a frame before adding new items to avoid conflicts
+          time.sleep(0.001)
+          # Only show essential mode status
+          p.addUserDebugText(status_text, textPosition=[0, 0, 2.0], textColorRGB=status_color, textSize=1.2)
+          if episode_info:
+            p.addUserDebugText(episode_info, textPosition=[0, 0, 1.6], textColorRGB=[0, 0, 0], textSize=0.9)
+        except:
+          pass
+      
+  except Exception as e:
+    # Fail silently to avoid crashing simulation
+    pass
+  
+  # Display autonomous status every 5 seconds (reduced console output)
   if autonomous_mode and int(t * 60) % 300 == 0:  # Every 300 frames at 60fps = 5 seconds
     robot_pos, _ = p.getBasePositionAndOrientation(husky)
     
@@ -2197,9 +3131,13 @@ while 1:
         p.resetJointState(kukaId, i, jointPoses[i])
 
   ls = p.getLinkState(kukaId, kukaEndEffectorIndex)
-  if (hasPrevPose):
-    p.addUserDebugLine(prevPose, pos, [0, 0, 0.3], 1, trailDuration)
-    p.addUserDebugLine(prevPose1, ls[4], [1, 0, 0], 1, trailDuration)
+  # Reduce trail drawing frequency to prevent debug draw warnings
+  if (hasPrevPose and int(t * 240) % 12 == 0):  # Only draw trail every 0.05 seconds
+    try:
+      p.addUserDebugLine(prevPose, pos, [0, 0, 0.3], 1, trailDuration)
+      p.addUserDebugLine(prevPose1, ls[4], [1, 0, 0], 1, trailDuration)
+    except:
+      pass  # Fail silently if trail drawing fails
   prevPose = pos
   prevPose1 = ls[4]
   hasPrevPose = 1

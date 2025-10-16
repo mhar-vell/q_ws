@@ -15,6 +15,7 @@ class MobileManipulatorEnv:
         self.action_dim = 10 # Example: 7 joints + 3 base moves
         self.disturbance_types = ['none', 'random', 'periodic', 'continuous', 'impulse']
         self.current_disturbance = 'none'
+        self.rl_wheel_commands = {'active': False}  # Initialize wheel command storage
         self.reset()
 
     def reset(self):
@@ -40,10 +41,10 @@ class MobileManipulatorEnv:
     def step(self, action):
         # Map actions to robot commands
         # Actions 0-6: KUKA joint increments
-        # Actions 7: Husky forward, 8: turn left, 9: turn right
+        # Actions 7: Move towards current trajectory goal, 8: turn left, 9: turn right
         joint_delta = 0.05  # radians per step
-        base_speed = 0.2    # meters per step
-        base_turn = 0.2     # radians per step
+        base_speed = 0.5    # Increased for better waypoint following
+        base_turn = 0.3     # Increased for better turning
 
         num_kuka_joints = self.p.getNumJoints(self.kuka)
         # Get current joint positions
@@ -58,14 +59,37 @@ class MobileManipulatorEnv:
             self.p.setJointMotorControlArray(self.kuka, range(num_kuka_joints),
                                             self.p.POSITION_CONTROL, targetPositions=new_pos)
         elif action == num_kuka_joints:
-            # Husky forward
-            self.p.resetBaseVelocity(self.husky, linearVelocity=[base_speed, 0, 0])
+            # WAYPOINT FOLLOWING: Move towards current trajectory goal using wheel control
+            robot_pos, robot_orn = self.p.getBasePositionAndOrientation(self.husky)
+            
+            # Calculate direction to current trajectory goal
+            goal_x, goal_y = self.goal_pose[0], self.goal_pose[1]
+            dx = goal_x - robot_pos[0]
+            dy = goal_y - robot_pos[1]
+            
+            # Calculate angle to target
+            angle_to_target = np.arctan2(dy, dx)
+            
+            # Get current robot orientation
+            current_euler = self.p.getEulerFromQuaternion(robot_orn)
+            current_yaw = current_euler[2]
+            
+            # Calculate angle difference
+            angle_diff = angle_to_target - current_yaw
+            while angle_diff > np.pi:
+                angle_diff -= 2 * np.pi
+            while angle_diff < -np.pi:
+                angle_diff += 2 * np.pi
+            
+            # Apply wheel-based control for consistent movement
+            self._apply_wheel_control(angle_diff, base_speed, base_turn)
+                
         elif action == num_kuka_joints + 1:
-            # Husky turn left
-            self.p.resetBaseVelocity(self.husky, angularVelocity=[0, 0, base_turn])
+            # Husky turn left using wheel control
+            self._apply_wheel_control(1.0, 0, base_turn)  # Force turn left
         elif action == num_kuka_joints + 2:
-            # Husky turn right
-            self.p.resetBaseVelocity(self.husky, angularVelocity=[0, 0, -base_turn])
+            # Husky turn right using wheel control
+            self._apply_wheel_control(-1.0, 0, base_turn)  # Force turn right
 
         # Apply disturbance
         self.inject_disturbance()
@@ -74,6 +98,17 @@ class MobileManipulatorEnv:
         self.timestep += 1
         done_flag = self.check_done(obs)
         return obs, rew, done_flag
+
+    def _apply_wheel_control(self, angle_diff, forward_speed, turn_speed):
+        """Apply safe wheel-based control for RL navigation"""
+        # Store wheel commands for main simulation loop to apply
+        # This avoids conflicts between RL and autonomous control systems
+        self.rl_wheel_commands = {
+            'angle_diff': angle_diff,
+            'forward_speed': forward_speed * 0.3,  # Reduced speed for stability
+            'turn_speed': turn_speed * 0.3,        # Reduced turn rate for stability
+            'active': True
+        }
 
     def get_state(self):
         try:
@@ -121,28 +156,53 @@ class MobileManipulatorEnv:
         return obs
 
     def get_reward(self, obs, action):
-        # End-effector error (distance to goal)
-        ee_error = np.linalg.norm(obs[-4:-1] - self.goal_pose[:3])
+        # Base position and end-effector error (distance to goal)
+        base_pos = obs[:2]  # [x, y] position of robot base
+        ee_pos = obs[-4:-1]  # End-effector position [x, y, z]
+        
+        # Calculate both base and end-effector distances to trajectory goal
+        base_goal_error = np.linalg.norm(base_pos - self.goal_pose[:2])
+        ee_goal_error = np.linalg.norm(ee_pos - self.goal_pose[:3])
 
-        # IMU instability penalty (base linear acceleration)
-        # Assume IMU data is last 6 elements: [vx, vy, vz, wx, wy, wz]
+        # Multi-objective reward: Base navigation + End-effector tracking
+        base_reward = -base_goal_error * 2.0  # Base should move to trajectory position
+        ee_reward = -ee_goal_error * 1.0      # End-effector should reach trajectory height
+        
+        # Success bonus for reaching trajectory waypoint
+        success_bonus = 0.0
+        if base_goal_error < 0.1 and ee_goal_error < 0.05:  # Base within 10cm, EE within 5cm
+            success_bonus = 2.0  # Large bonus for reaching waypoint
+        elif base_goal_error < 0.2:  # Base approaching waypoint
+            success_bonus = 0.5  # Moderate bonus for getting close
+
+        # Movement action reward: Encourage using waypoint following action
+        movement_bonus = 0.0
+        if action == self.p.getNumJoints(self.kuka):  # Action 7: Move towards trajectory goal
+            movement_bonus = 0.1  # Small bonus for taking navigation action
+
+        # IMU instability penalty (reduced for trajectory learning)
         imu_accel = np.linalg.norm(obs[-6:-3])
-        instability_penalty = 0.2 * imu_accel  # Weight for instability
+        instability_penalty = 0.05 * imu_accel
 
-        # Energy/smoothness penalty (large joint/base movements)
-        # Penalize if action is a base move or large joint change
+        # Energy penalty (minimal to encourage exploration)
         energy_penalty = 0.0
         if action >= self.p.getNumJoints(self.kuka):
-            energy_penalty = 0.1  # Penalize base moves
+            energy_penalty = 0.02
 
-        # Total reward: negative error, minus penalties
-        rew = -ee_error - instability_penalty - energy_penalty
+        # Total reward: navigation + tracking + bonuses - penalties
+        rew = base_reward + ee_reward + success_bonus + movement_bonus - instability_penalty - energy_penalty
         return rew
 
     def check_done(self, obs):
-        # Success if end-effector is close to goal
-        error = np.linalg.norm(obs[-4:-1] - self.goal_pose[:3])
-        return error < 0.01  # 1cm tolerance
+        # Success if both base and end-effector reach trajectory goal
+        base_pos = obs[:2]  # [x, y] position of robot base
+        ee_pos = obs[-4:-1]  # End-effector position [x, y, z]
+        
+        base_error = np.linalg.norm(base_pos - self.goal_pose[:2])
+        ee_error = np.linalg.norm(ee_pos - self.goal_pose[:3])
+        
+        # Success if base is within 10cm and end-effector within 5cm of trajectory goal
+        return base_error < 0.1 and ee_error < 0.05
 
     def inject_disturbance(self):
         # Simulate disturbances based on current scenario

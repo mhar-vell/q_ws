@@ -1,0 +1,65 @@
+# Large model files - typically too big for Git
+*.pth
+*.pt
+*.pkl
+*.model
+
+# Video files - usually too large
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Image files that might be large
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.tiff
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Training data and logs (can be very large)
+episode_*.json
+scenario_*.json
+session_*.json
+rl_metrics_*.json
+*episode_data*.json
+*.json
+
+# Specifically exclude the problematic large files
+archives/episode_data/
+archives/scenario_reports/
+archives/session_summaries/
+
+# Environment files
+.env
+.venv
+env/
+venv/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Archive data (can be large)
+archives/episode_data/
+archives/scenario_reports/
+archives/session_summaries/
