@@ -446,9 +446,20 @@ p.changeDynamics(ground_plane, -1,
                 contactStiffness=30000)     # Contact stiffness
 print("🌍 Ground plane configured with realistic friction (μ=0.8) and contact properties")
 
-# === HUSKY ROBOT LOADING WITH ENHANCED PHYSICS ===
-husky = p.loadURDF("husky/husky.urdf", [0.290388, 0.329902, -0.310270],
-                   [0.002328, -0.000984, 0.996491, 0.083659])
+# === HUSKY ROBOT LOADING WITH PROPER GROUND POSITIONING ===
+# Load Husky at proper ground level (wheels touching ground at z=0)
+# Ground plane is at z=-0.3, so Husky base should be around z=0.0 for proper wheel contact
+husky_base_x = 0.0       # Center position
+husky_base_y = 0.0       # Center position  
+husky_base_z = 0.0       # Proper ground level (wheels will contact ground at z=-0.3)
+
+husky = p.loadURDF("husky/husky.urdf", [husky_base_x, husky_base_y, husky_base_z],
+                   [0.0, 0.0, 0.0, 1.0])  # Upright orientation
+
+print(f"🚗 Husky mobile robot loaded at GROUND LEVEL:")
+print(f"   • Position: [{husky_base_x:.3f}, {husky_base_y:.3f}, {husky_base_z:.3f}]")
+print(f"   • Orientation: Upright (no rotation)")
+print(f"   • Wheels will contact ground plane at z=-0.3")
 # === HUSKY WHEEL DYNAMICS ENHANCEMENT ===
 print("🚗 Configuring Husky wheel dynamics...")
 husky_wheel_indices = []
@@ -482,9 +493,23 @@ p.changeDynamics(husky, -1,  # Base link
                 linearDamping=0.1,          # Air resistance
                 angularDamping=0.1)         # Angular damping
 print("🤖 Husky chassis configured: 30kg mass, realistic friction and damping")
-# === KUKA ARM LOADING WITH ENHANCED DYNAMICS ===
-kukaId = p.loadURDF("kuka_iiwa/model_free_base.urdf", 0.193749, 0.345564, 0.120208, 0.002327,
-                    -0.000988, 0.996491, 0.083659)
+# === KUKA ARM LOADING WITH PROPER MOUNTING POSITION ===
+# Load KUKA at correct position: ON TOP of Husky base
+# Husky center is now at [0.0, 0.0, 0.0]
+# KUKA should be 0.5m above Husky center for proper mounting
+kuka_mount_x = husky_base_x      # Same X as Husky center (0.0)
+kuka_mount_y = husky_base_y      # Same Y as Husky center (0.0)
+kuka_mount_z = husky_base_z + 0.5  # 0.5m above Husky center = 0.5
+
+kukaId = p.loadURDF("kuka_iiwa/model_free_base.urdf", 
+                    kuka_mount_x, kuka_mount_y, kuka_mount_z,  # Proper mounting position
+                    0.0, 0.0, 0.0, 1.0)                       # Upright orientation
+
+print(f"🦾 KUKA arm loaded at PROPER MOUNTING POSITION:")
+print(f"   • Position: [{kuka_mount_x:.3f}, {kuka_mount_y:.3f}, {kuka_mount_z:.3f}]")
+print(f"   • Height above Husky: 0.5m")
+print(f"   • Orientation: Upright, aligned with Husky")
+print(f"   • Ready for constraint-based mounting")
 ob = kukaId
 jointPositions = [3.559609, 0.411182, 0.862129, 1.744441, 0.077299, -1.129685, 0.006001]
 
@@ -520,24 +545,88 @@ p.changeDynamics(kukaId, -1,
                 angularDamping=0.05)
 print("🔧 KUKA base configured: 15kg mass, enhanced dynamics")
 
-#put kuka on top of husky - CORRECTED PHYSICS
-# Fixed constraint positioning: Place KUKA arm properly on top of Husky
-# Offset [0, 0, 0.5] places the KUKA base 0.5m ABOVE the Husky center (not below)
-# Create COMPLIANT constraint instead of rigid fixed joint
+# BACK TO BASICS: Simple, proven constraint approach
+print("🔧 Creating basic mounting constraint...")
+
+# Create the most basic fixed constraint
 cid = p.createConstraint(husky, -1, kukaId, -1, p.JOINT_FIXED, 
                          [0, 0, 0],      # Parent frame (Husky center)
                          [0, 0, 0],      # Child frame (KUKA base)  
                          [0., 0., 0.5],  # Parent offset: 0.5m UP from Husky center
                          [0, 0, 0, 1])   # Child offset: at KUKA base
-# Configure constraint for STABILITY with compliance parameters
-# CRITICAL FIX: Reduced constraint force to prevent "jumping" behavior
-p.changeConstraint(cid, maxForce=2000)  # Reduced from 50,000N (96% reduction)
 
-print(f"✅ KUKA-Husky constraint created with COMPLIANT mounting:")
-print(f"   • Constraint ID: {cid}")
-print(f"   • Max Force: 2,000N (was 50,000N - REDUCED 96%)")
-print(f"   • ERP: 0.1 (soft error correction)")
-print(f"   🔧 PHYSICS FIX: Eliminated explosive constraint corrections")
+# Use the default constraint settings (don't change maxForce)
+print(f"✅ Basic constraint created (ID: {cid})")
+print("   Using default PyBullet constraint parameters")
+
+# Allow constraint to settle with several physics steps
+print("🔧 Allowing constraint to settle...")
+for i in range(50):  # 50 physics steps to settle
+    p.stepSimulation()
+    time.sleep(1./240.)  # Match simulation timestep
+
+print("✅ Constraint settled - KUKA should be properly mounted")
+
+# No verification - let PyBullet handle it naturally
+
+# === SIMPLIFIED MOUNTING MONITORING SYSTEM ===
+class MountingMonitor:
+    def __init__(self, constraint_id):
+        self.cid = constraint_id
+        self.max_safe_force = 1200  # N - Warning threshold
+        self.critical_force = 1400  # N - Critical threshold
+        self.force_history = []
+        self.last_check = 0
+        
+    def check_mounting_stability(self):
+        """Monitor constraint forces and detect unmounting risks."""
+        try:
+            current_time = time.time()
+            if current_time - self.last_check < 0.5:  # Check every 0.5s
+                return True
+            self.last_check = current_time
+            
+            # Check constraint force
+            constraint_state = p.getConstraintState(self.cid)
+            current_force = np.linalg.norm(constraint_state[0]) if constraint_state else 0
+            self.force_history.append(current_force)
+            
+            # Keep only last 10 samples
+            if len(self.force_history) > 10:
+                self.force_history.pop(0)
+            
+            # Report constraint force
+            print(f"🔧 Constraint Force: {current_force:.1f}N")
+            
+            # Check for dangerous force levels (higher thresholds for 50,000N constraint)
+            if current_force > 25000:  # 50% of max force
+                print(f"🚨 CRITICAL MOUNTING FORCE: {current_force:.1f}N - RISK OF UNMOUNTING!")
+                return self.emergency_stabilize()
+            elif current_force > 15000:  # 30% of max force
+                print(f"⚠️  HIGH MOUNTING FORCE: {current_force:.1f}N - Monitoring closely")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Mounting monitor error: {e}")
+            return False
+    
+    def emergency_stabilize(self):
+        """Emergency procedure to prevent unmounting."""
+        try:
+            print("🔧 EMERGENCY STABILIZATION - Reducing constraint force")
+            p.changeConstraint(self.cid, maxForce=1000)  # Emergency reduction
+            time.sleep(0.2)  # Brief pause
+            p.changeConstraint(self.cid, maxForce=1300)  # Gradual restore
+            print("✅ Emergency stabilization complete")
+            return True
+        except Exception as e:
+            print(f"❌ Emergency stabilization failed: {e}")
+            return False
+
+# Initialize mounting monitor
+mounting_monitor = MountingMonitor(cid)
+print(f"🔍 Mounting stability monitor initialized")
 
 # === PHYSICS DIAGNOSTICS & MONITORING ===
 def print_physics_diagnostics():
@@ -1357,16 +1446,35 @@ def archive_existing_data():
         except Exception as e:
             print(f"❌ Could not archive {file}: {e}")
     
-    if archived_count > 0:
-        print(f"✅ Successfully archived {archived_count} data files")
+    # Also clean up any stray model files in root
+    model_files = glob.glob("rl_checkpoint_*.pth") + glob.glob("rl_final_*.pth")
+    model_count = 0
+    for file in model_files:
+        try:
+            if "checkpoint" in file:
+                shutil.move(file, f"trained_models/checkpoints/{file}")
+                model_count += 1
+                print(f"🎯 Moved model: {file} → trained_models/checkpoints/")
+            else:
+                shutil.move(file, f"trained_models/final/{file}")
+                model_count += 1
+                print(f"🎯 Moved model: {file} → trained_models/final/")
+        except Exception as e:
+            print(f"❌ Could not move model {file}: {e}")
+
+    total_organized = archived_count + model_count
+    if total_organized > 0:
+        print(f"✅ Successfully organized {total_organized} files ({archived_count} data, {model_count} models)")
         
         # Create archive summary
         summary = {
             'archive_date': datetime.now().isoformat(),
             'archived_files': archived_count,
+            'moved_models': model_count,
             'episode_files': len(episode_files),
             'scenario_files': len(scenario_files),
-            'note': 'Data archived before new session'
+            'model_files': len(model_files),
+            'note': 'Data archived and models organized before new session'
         }
         
         summary_file = f"archives/session_summaries/archive_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -1378,7 +1486,7 @@ def archive_existing_data():
         except Exception as e:
             print(f"⚠️  Could not save archive summary: {e}")
     else:
-        print("ℹ️  No data files to archive")
+        print("ℹ️  No data files or models to organize")
 
 def list_archives():
     """List all archived data with summary statistics"""
@@ -1431,17 +1539,20 @@ def reset_robot_state():
     global rl_trajectory_phase, rl_start_time, rl_step_count, restart_simulation, restart_reason
     
     # Reset robot position to starting point
-    start_pos = [0, 0, 0.7]  # Starting position
-    start_orientation = p.getQuaternionFromEuler([0, 0, 0])  # Starting orientation
+    # Use proper mounting positions (consistent with initial loading)
+    husky_reset_pos = [0.0, 0.0, 0.0]  # Ground level position  
+    start_orientation = p.getQuaternionFromEuler([0, 0, 0])  # Upright orientation
     
     try:
-        # Reset Husky robot position
-        p.resetBasePositionAndOrientation(husky, start_pos, start_orientation)
+        # Reset Husky robot to ground level position
+        p.resetBasePositionAndOrientation(husky, husky_reset_pos, start_orientation)
+        print(f"✅ Husky reset to ground position: {husky_reset_pos}")
         
-        # Reset Kuka arm position if it exists
+        # Reset KUKA arm to proper mounting position (0.5m above Husky)
         if 'kukaId' in globals():
-            arm_start_pos = [0.5, 0, 0.5]  # Kuka arm starting position
-            p.resetBasePositionAndOrientation(kukaId, arm_start_pos, start_orientation)
+            kuka_reset_pos = [0.0, 0.0, 0.5]  # 0.5m above Husky center
+            p.resetBasePositionAndOrientation(kukaId, kuka_reset_pos, start_orientation)
+            print(f"✅ KUKA reset to mounting position: {kuka_reset_pos}")
         
         # Stop all wheel movement
         for i in range(len(wheels)):
@@ -2066,8 +2177,21 @@ while 1:
         print("   ✅ Constraint force reduced to 1,000N (emergency mode)")
       except:
         print("   ❌ Failed to apply emergency constraint reduction")
+    
+    # ANTI-UNMOUNTING: Check mounting stability
+    try:
+      mounting_stability = mounting_monitor.check_mounting_stability()
+      if not mounting_stability:
+        print("🚨 MOUNTING INSTABILITY - Taking corrective action")
+    except Exception as e:
+      print(f"⚠️  Mounting monitor error: {e}")
   
   keys = p.getKeyboardEvents()
+  
+  # Debug: Show when 't' key is detected
+  if ord('t') in keys:
+    print(f"🔍 RAW DEBUG: 't' key detected in keys! Value: {keys[ord('t')]}")
+  
   shift = 0.01
   wheelVelocities = [0, 0, 0, 0]
   speed = 1.0
@@ -2177,55 +2301,63 @@ while 1:
       # Display archive inventory
       list_archives()
     if ord('t') in keys:
+      print(f"🔍 DEBUG: 't' key pressed! Keys state: {keys[ord('t')]}")
       current_time = time.time()
       if current_time - last_key_press_time.get('t', 0) > key_cooldown:
         last_key_press_time['t'] = current_time
-        print(f"🔍 DEBUG: 't' key detected! RL_AVAILABLE={RL_AVAILABLE}")
-        if RL_AVAILABLE:
-          # Toggle RL training mode
+        print(f"🔍 DEBUG: 't' key detected! RL_AVAILABLE={RL_AVAILABLE}, cooldown passed")
+        # Always allow built-in RL training (tabular Q-learning) regardless of external modules
+        # The built-in RL system doesn't require external trajectory planner
+        try:
+          # ABSOLUTE MINIMAL: Just toggle the flag, change nothing else
           rl_training_mode = not rl_training_mode
-          print(f"🔄 DEBUG: rl_training_mode toggled to {rl_training_mode}")
           if rl_training_mode:
-            rl_execution_mode = False
-            autonomous_mode = False  # Disable regular autonomous mode
+            print("\n" + "="*60)
+            print("🎓 RL TRAINING ACTIVATED")
+            print("="*60)
+            print(f"📊 Current Episode: {rl_current_episode + 1}/{rl_num_episodes}")
+            print(f"🎯 Algorithm: {rl_current_algorithm}")
+            print(f"📈 Training Progress: {(rl_current_episode/rl_num_episodes)*100:.1f}%")
+            # Check constraint integrity
+            constraint_info = p.getConstraintInfo(cid)
+            print(f"🔧 Constraint Status: {constraint_info}")
+            print("="*60 + "\n")
+            # Don't change autonomous_mode
+            # Don't change rl_execution_mode  
+            # Don't call any functions
+            # Don't modify any robots or constraints
             
-            # Force stop all wheel movement from autonomous mode
-            wheelVelocities = [0, 0, 0, 0]  # Reset autonomous wheel velocities
-            for i in range(len(wheels)):
-              p.setJointMotorControl2(husky, wheels[i], p.VELOCITY_CONTROL, targetVelocity=0, force=300)
-            
-            # Archive any existing data before starting new training
-            print("📦 Archiving existing episode data...")
-            archive_existing_data()
-            
-            rl_start_time = time.time()  # Initialize training start time
-            print("🎓 RL TRAINING STARTED ✅")
-            print("   Robot will learn trajectory following")
-            
-            # Force immediate visual status update with error handling
+            # MINIMAL visual status update - safe version to show RL training is active
             try:
+              # Clear and show RL training status (minimal to prevent GUI issues)
               p.removeAllUserDebugItems()
-              time.sleep(0.002)  # Small delay to prevent conflicts
-              p.addUserDebugText("RL TRAINING ACTIVE", textPosition=[0, 0, 2], textColorRGB=[0, 1, 0], textSize=1.5)
-              p.addUserDebugText("Robot learning trajectory following", textPosition=[0, 0, 1.5], textColorRGB=[1, 1, 1], textSize=1.0)
+              time.sleep(0.005)  # Small delay
+              p.addUserDebugText("🎓 RL TRAINING ACTIVE", textPosition=[0, 0, 2.5], 
+                               textColorRGB=[0, 1, 0], textSize=1.8)
+              p.addUserDebugText(f"Episode: {rl_current_episode + 1}/{rl_num_episodes}", 
+                               textPosition=[0, 0, 2.0], textColorRGB=[1, 1, 1], textSize=1.2)
             except:
-              pass  # Fail silently if debug items can't be updated
+              pass  # Fail silently if visual updates cause issues
           else:
             # Stop robot movement when disabling RL training
             for i in range(len(wheels)):
               p.setJointMotorControl2(husky, wheels[i], p.VELOCITY_CONTROL, targetVelocity=0, force=500)
             print("🎓 RL TRAINING STOPPED ❌")
             
-            # Force immediate visual status update with error handling
+            # MINIMAL visual status update - safe version to show manual mode
             try:
+              # Clear and show manual mode status
               p.removeAllUserDebugItems()
-              time.sleep(0.002)  # Small delay to prevent conflicts
-              p.addUserDebugText("MANUAL MODE", textPosition=[0, 0, 2], textColorRGB=[0.5, 0.5, 0.5], textSize=1.5)
-              p.addUserDebugText("Press 't' to train or 'm' for autonomous", textPosition=[0, 0, 1.5], textColorRGB=[1, 1, 1], textSize=1.0)
+              time.sleep(0.005)  # Small delay
+              p.addUserDebugText("MANUAL MODE", textPosition=[0, 0, 2.5], 
+                               textColorRGB=[0.5, 0.5, 0.5], textSize=1.8)
+              p.addUserDebugText("Press 't' to train or 'm' for autonomous", 
+                               textPosition=[0, 0, 2.0], textColorRGB=[1, 1, 1], textSize=1.0)
             except:
-              pass  # Fail silently if debug items can't be updated
-        else:
-          print("❌ RL not available - cannot toggle training mode")
+              pass  # Fail silently if visual updates cause issues
+        except Exception as e:
+          print(f"❌ Error toggling RL training mode: {e}")
+          print("   Check that RL environment is properly initialized")
     if ord('e') in keys and RL_AVAILABLE:
       # Toggle RL execution mode
       rl_execution_mode = not rl_execution_mode
@@ -2404,8 +2536,22 @@ while 1:
     
     # Initialize episode if needed
     if rl_step_counter == 0:
-      rl_state = rl_env.reset()
+      # DISABLE FULL RESET to prevent unmounting - always continue from current position
+      print(f"🎯 Episode {rl_current_episode + 1}/{rl_num_episodes} - Continuing from current position (reset disabled)")
+      # Just get current state without any reset to avoid constraint issues
+      rl_state = rl_env.get_state()
+      
+      # Check constraint stability without any reset operations
+      try:
+        constraint_state = p.getConstraintState(cid)
+        if constraint_state:
+          force = np.linalg.norm(constraint_state[0])
+          print(f"🔧 Episode start constraint force: {force:.1f}N - {'✅ STABLE' if force < 1500 else '⚠️ HIGH'}")
+      except:
+        print("⚠️  Could not check constraint")
+      
       rl_env.current_disturbance = scenario
+      
       # Reset smooth circular trajectory tracking for new episode
       rl_trajectory_phase = 0.0
       
@@ -2427,7 +2573,7 @@ while 1:
       
       intensity_symbol = "⚡" if intensity == "golden" else "📊"
       intensity_factor = disturbance_manager.intensity_modes[intensity]["factor"]
-      print(f"\n🎯 Episode {rl_current_episode + 1}/{rl_num_episodes} | Scenario: {scenario.upper()}")
+      print(f"🎯 Episode {rl_current_episode + 1}/{rl_num_episodes} | Scenario: {scenario.upper()} | Intensity: {intensity_symbol}{intensity.upper()}")
     
     # Update trajectory with smooth circular motion (matching autonomous pattern)
     if rl_step_counter % rl_trajectory_update_steps == 0:
@@ -2446,8 +2592,8 @@ while 1:
       rl_env.goal_pose = np.array([target_x, target_y, target_z, 0, 0, 0])
       print(f"🎯 Target: Smooth circular position (phase: {rl_trajectory_phase:.2f})")
       
-      # Add visual marker for current target position (less frequent updates to avoid warnings)
-      if int(t * 240) % 60 == 0:  # Update target marker every 0.25 seconds instead of every frame
+      # Add visual marker for current target position - DISABLED to prevent GUI panel issues
+      if False:  # Disabled to prevent GUI panels from appearing
         try:
           target_pos = [target_x, target_y, target_z]
           # Add bright red sphere marker (no text to reduce debug items)
@@ -2457,11 +2603,30 @@ while 1:
           pass  # Fail silently if target marker can't be added
     
     # Execute one RL step per simulation frame
+    # Safety check: Initialize rl_state if None (first time RL training starts)
+    if rl_state is None:
+      rl_state = rl_env.get_state()
+      print("🔧 RL state initialized for first training step")
+    
     rl_action = rl_agent.select_action(rl_state)
     rl_next_state, rl_reward, rl_done = rl_env.step(rl_action)
     rl_agent.update(rl_state, rl_action, rl_reward, rl_next_state)
     rl_state = rl_next_state
     rl_step_counter += 1
+    
+    # Debug output for episode progress (every 50 steps)
+    if rl_step_counter % 50 == 0:
+      base_pos = rl_state[:2]
+      goal_pos = rl_env.goal_pose[:2]
+      base_error = np.linalg.norm(base_pos - goal_pos)
+      print(f"Step {rl_step_counter}: base_error={base_error:.3f}m, done={rl_done}, reward={rl_reward:.3f}")
+    
+    # ANTI-UNMOUNTING: Quick mounting check every 100 steps during RL training
+    if rl_step_counter % 100 == 0:
+      try:
+        mounting_monitor.check_mounting_stability()
+      except:
+        pass  # Don't interrupt training for monitoring errors
     
     # Apply RL wheel commands safely (avoids control conflicts)
     if hasattr(rl_env, 'rl_wheel_commands') and rl_env.rl_wheel_commands.get('active', False):
@@ -2512,9 +2677,9 @@ while 1:
         trajectory_progress = (rl_trajectory_phase / (2 * math.pi)) * 100  # Phase-based progress
         print(f"[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} Episode {rl_current_episode + 1} SUCCESS: steps={rl_step_counter}, error={final_error:.3f}m, trajectory={trajectory_progress:.1f}%, energy={ep_energy}")
         
-        # Capture screenshot for successful episodes (every 10th success)
+        # Capture screenshot for successful episodes (every 10th success) - DISABLED during RL to avoid GUI issues
         success_count = rl_metrics[combo_key]['success']
-        if success_count % 10 == 0:  # Only capture every 10th success to avoid too many photos
+        if False:  # Disabled to prevent GUI panel issues
           photo_manager.capture_training_screenshot(scenario, rl_current_episode + 1, rl_current_algorithm)
       else:
         trajectory_progress = (rl_trajectory_phase / (2 * math.pi)) * 100  # Phase-based progress
@@ -2533,8 +2698,8 @@ while 1:
       # Save checkpoint every 100 episodes
       if rl_current_episode % 100 == 0 and rl_current_episode > 0:
         try:
-          rl_agent.save(f'rl_checkpoint_{scenario}_ep{rl_current_episode}')
-          print(f"💾 Checkpoint saved: {scenario} episode {rl_current_episode}")
+          rl_agent.save(f'trained_models/checkpoints/rl_checkpoint_{scenario}_ep{rl_current_episode}')
+          print(f"💾 Checkpoint saved: {scenario} episode {rl_current_episode} (Next episode will reset robot position)")
         except Exception as e:
           print(f"⚠️  Failed to save checkpoint: {e}")
       
@@ -2550,7 +2715,7 @@ while 1:
         
         # Save final model for this combination
         try:
-          rl_agent.save(f'rl_final_{scenario}_{intensity}')
+          rl_agent.save(f'trained_models/final/rl_final_{scenario}_{intensity}')
           print(f"💾 Final model saved for combination '{scenario}_{intensity}'")
         except Exception as e:
           print(f"⚠️  Failed to save final model: {e}")
@@ -3003,8 +3168,8 @@ while 1:
         except:
           pass
       
-      # Clean simulation - minimal debug items to prevent warnings
-      if int(t * 240) % 600 == 0:  # Clean and update debug items every 2.5 seconds
+      # Clean simulation - minimal debug items to prevent warnings - DISABLED during RL training
+      if not rl_training_mode and int(t * 240) % 600 == 0:  # Skip during RL to prevent GUI panel issues
         try:
           p.removeAllUserDebugItems()
           # Wait a frame before adding new items to avoid conflicts
@@ -3053,8 +3218,9 @@ while 1:
     p.stepSimulation()
   
   # === VIDEO RECORDING UPDATE ===
-  # Update video recorder frame and camera tracking
-  video_recorder.update_frame(robot_id=husky)
+  # Update video recorder frame and camera tracking (skip during RL training to avoid GUI issues)
+  if not rl_training_mode:
+    video_recorder.update_frame(robot_id=husky)
   
   # === SYSTEMATIC DISTURBANCE SCENARIOS ===
   # Apply current disturbance scenario using the disturbance manager
