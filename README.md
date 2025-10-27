@@ -50,14 +50,14 @@ conda env create -f environment.yml
 conda activate mobile_manipulator_rl
 
 # Run basic test
-python sim_husky_kuka.py
+python src/simulation/sim_husky_kuka.py
 ```
 
 ### Quick Training
 
 ```bash
 # Run DQN training with dual-intensity
-python sim_husky_kuka.py
+python src/simulation/sim_husky_kuka.py
 
 # Monitor progress
 # Press 't' for training mode
@@ -143,17 +143,17 @@ Professional data organization with unique session IDs:
 
 ```bash
 # Create new training session
-python create_training_session.py \
+python tools/training/create_training_session.py \
     --algorithm dqn \
     --feature dual_intensity \
     --episodes 500 \
     --version 1.0
 
 # Query existing sessions
-python query_training_sessions.py --list
+python tools/training/query_training_sessions.py --list
 
 # Compare training runs
-python query_training_sessions.py --compare SESSION_1 SESSION_2
+python tools/training/query_training_sessions.py --compare SESSION_1 SESSION_2
 ```
 
 ---
@@ -162,44 +162,82 @@ python query_training_sessions.py --compare SESSION_1 SESSION_2
 
 ```
 q_ws/
-├── 📂 Core Implementation
-│   ├── sim_husky_kuka.py           # Main simulation & training
-│   ├── rl_mission_env.py           # RL environment & DQN agent
-│   ├── rl_trajectory_planner.py    # Advanced trajectory planning
-│   ├── trajectory_generators.py    # 9 trajectory types
-│   └── rl_config.py               # Configuration parameters
+├── 📂 Core Application
+│   └── src/
+│       ├── simulation/
+│       │   ├── sim_husky_kuka.py         # Main simulation & training (2,263 lines)
+│       │   └── rl_mission_env.py         # RL environment & DQN agent
+│       ├── planning/
+│       │   ├── rl_trajectory_planner.py  # Advanced trajectory planning
+│       │   └── trajectory_generators.py  # 9 trajectory types
+│       └── config/
+│           └── rl_config.py             # Configuration parameters
 │
-├── 📂 Training Data Management
-│   ├── create_training_session.py  # Auto-create new sessions
-│   ├── query_training_sessions.py  # Query & compare sessions
-│   ├── organize_archives.sh        # File organization
-│   └── experiment_index.json       # Master training index
+├── 📂 Management Tools
+│   └── tools/
+│       ├── training/
+│       │   ├── create_training_session.py  # Auto-create new sessions
+│       │   ├── query_training_sessions.py  # Query & compare sessions
+│       │   └── create_manifest.py          # Metadata generation
+│       ├── setup/
+│       │   └── organize_current_training.py # Organization utilities
+│       └── data/
+│           ├── experiment_index.json       # Master training index
+│           └── current_training_manifest.json # Current session data
 │
-├── 📂 archives/
-│   ├── 01_documentation/           # All guides & documentation
-│   ├── 02_training_sessions/       # Isolated training runs
-│   │   ├── training_20251016_dqn_dual_intensity_500ep_v1.0/
-│   │   │   ├── manifest.json       # Complete metadata
-│   │   │   ├── README.md           # Session summary
-│   │   │   ├── checkpoints/        # Training checkpoints
-│   │   │   ├── final_models/       # Trained models
-│   │   │   ├── metrics/            # Performance data
-│   │   │   └── analysis/           # Generated plots
-│   │   └── [other sessions...]
-│   ├── 03_comparative_analysis/    # Cross-session comparisons
-│   ├── 04_test_scripts/           # Unit & integration tests
-│   └── 05_visualization_tools/     # Plotting utilities
+├── 📂 Training Data (Phase-Based Organization)
+│   └── training_data/
+│       ├── training_overview.md           # Master research overview
+│       ├── phase_01_baseline_testing/     # Algorithm comparison
+│       │   ├── qlearning_baseline/        # Q-Learning: 41.3% success ✅
+│       │   ├── dqn_baseline/              # DQN baseline (pending) ❌
+│       │   └── phase_01_summary.md        # Phase documentation ✅
+│       ├── phase_02_dual_intensity_main/  # Main thesis experiment
+│       │   ├── dqn_dual_intensity/        # DQN: 79.9% success ✅
+│       │   │   ├── session_data/          # Complete training data
+│       │   │   │   ├── manifest.json      # Complete metadata
+│       │   │   │   ├── README.md          # Session summary
+│       │   │   │   ├── checkpoints/       # Training checkpoints
+│       │   │   │   ├── final_models/      # Trained models
+│       │   │   │   ├── metrics/           # Performance data
+│       │   │   │   └── analysis/          # Generated plots
+│       │   │   └── raw_data/              # Episode data & summaries
+│       │   ├── qlearning_dual_intensity/  # Q-Learning dual (pending) ❌
+│       │   └── phase_02_summary.md        # Phase documentation ✅
+│       ├── phase_03_future_experiments/   # Future research plans
+│       │   ├── advanced_algorithms/       # DDPG, SAC, Rainbow DQN
+│       │   ├── curriculum_learning/       # Gradual intensity progression
+│       │   ├── real_world_validation/     # Hardware experiments
+│       │   └── planning.md               # Future work roadmap ✅
+│       ├── consolidated_models/           # All trained models organized
+│       └── cross_phase_analysis/          # Research-level analysis
+│
+├── 📂 Project Documentation
+│   └── documentation/
+│       ├── academic/                      # Academic papers & drafts
+│       ├── disturbance_system/            # Disturbance documentation
+│       ├── optimization/                  # Performance optimization
+│       ├── project_overview/              # Project summaries
+│       ├── training_guides/               # Training methodology
+│       └── trajectory_planning/           # Trajectory planning docs
+│
+├── 📂 Testing & Validation
+│   └── test_scripts/
+│       ├── analysis_scripts/              # Analysis and evaluation
+│       ├── integration_tests/             # System integration tests
+│       └── unit_tests/                    # Unit testing suite
+│
+├── 📂 Visualization & Media
+│   └── visualization_tools/
+│       ├── plot_rl_results.py            # Results plotting
+│       ├── visualize_disturbances.py     # Disturbance analysis
+│       ├── physics_diagnostics.py        # System diagnostics
+│       └── screenshots/                   # Physics server images
 │
 ├── 📂 Environment
-│   ├── environment.yml            # Conda environment
-│   ├── photos/                    # Project images
-│   └── videos/                    # Training recordings
-│
-└── 📂 Documentation
-    ├── README.md                  # This file
-    ├── TRAINING_QUICKSTART_GUIDE.md
-    ├── TRAINING_DATA_MANAGEMENT_GUIDE.md
-    └── IMPLEMENTATION_SUMMARY.md
+│   ├── README.md                         # This file
+│   ├── STRUCTURE.md                      # Complete structure reference
+│   └── environment.yml                   # Conda environment
 ```
 
 ---
@@ -210,7 +248,7 @@ q_ws/
 
 ```python
 # Load environment
-from rl_mission_env import RLMissionEnvironment
+from src.simulation.rl_mission_env import RLMissionEnvironment
 env = RLMissionEnvironment()
 
 # Create DQN agent
@@ -243,11 +281,11 @@ for step in range(200):
 
 ```python
 # Generate training plots
-from visualization_tools import plot_rl_results
-plot_rl_results('rl_metrics_dqn.json')
+from visualization_tools.plot_rl_results import plot_rl_results
+plot_rl_results('training_data/phase_02_dual_intensity_main/dqn_dual_intensity/session_data/metrics/rl_metrics_dqn.json')
 
 # Compare scenarios
-from analysis_scripts import compare_scenarios
+from test_scripts.analysis_scripts import compare_scenarios
 compare_scenarios(['none_normal', 'impulse_golden'])
 ```
 
@@ -338,23 +376,23 @@ GOLDEN_MULTIPLIER = 1.61803398874989  # φ (golden ratio)
 
 ```bash
 # Test DQN device compatibility
-python archives/04_test_scripts/unit_tests/test_dqn_device.py
+python test_scripts/unit_tests/test_dqn_device.py
 
 # Test system integration
-python archives/04_test_scripts/integration_tests/test_rl_system.py
+python test_scripts/integration_tests/test_rl_system.py
 
 # Run all tests
-python -m pytest archives/04_test_scripts/
+python -m pytest test_scripts/
 ```
 
 ### Validation Scripts
 
 ```bash
 # Validate training session
-python archives/04_test_scripts/analysis_scripts/run_analysis.py
+python test_scripts/analysis_scripts/run_analysis.py
 
 # Check model performance
-python archives/04_test_scripts/integration_tests/test_enhanced_rl.py
+python test_scripts/integration_tests/test_enhanced_rl.py
 ```
 
 ---
@@ -379,13 +417,13 @@ tail -f training.log
 
 ```bash
 # Generate analysis plots
-python archives/05_visualization_tools/plot_rl_results.py
+python visualization_tools/plot_rl_results.py
 
 # Visualize disturbances
-python archives/05_visualization_tools/visualize_disturbances.py
+python visualization_tools/visualize_disturbances.py
 
 # Compare training sessions
-python query_training_sessions.py --compare \
+python tools/training/query_training_sessions.py --compare \
     training_20251016_dqn_dual_intensity_500ep_v1.0 \
     training_20251121_extended_1000ep_v1.5
 ```
@@ -519,17 +557,17 @@ python -c "import torch; print(torch.cuda.is_available())"
 **Q: Training session management?**
 ```bash
 # List all sessions
-python query_training_sessions.py --list
+python tools/training/query_training_sessions.py --list
 
 # Check session details
-cat archives/02_training_sessions/SESSION_ID/manifest.json
+cat training_data/phase_*/*/session_data/manifest.json
 ```
 
 ### Getting Help
 
-1. Check existing documentation in `archives/01_documentation/`
-2. Review training session logs in `archives/02_training_sessions/*/`
-3. Run diagnostic scripts in `archives/04_test_scripts/`
+1. Check existing documentation in `documentation/`
+2. Review training session logs in `training_data/phase_*/*/session_data/`
+3. Run diagnostic scripts in `test_scripts/`
 4. Open an issue with detailed error logs and system info
 
 ---

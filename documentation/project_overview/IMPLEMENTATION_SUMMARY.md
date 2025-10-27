@@ -7,16 +7,16 @@ I've implemented a complete training data management system for your mobile mani
 ## 📦 Files Created
 
 ### 1. **Automation Scripts**
-- ✅ `create_training_session.py` - Create new training sessions automatically
-- ✅ `query_training_sessions.py` - Query and compare training sessions
-- ✅ `create_manifest.py` - Generate metadata for existing training
-- ✅ `organize_archives.sh` - Shell script to organize all files
+- ✅ `tools/training/create_training_session.py` - Create new training sessions automatically
+- ✅ `tools/training/query_training_sessions.py` - Query and compare training sessions
+- ✅ `tools/training/create_manifest.py` - Generate metadata for existing training
+- ✅ `tools/setup/organize_current_training.py` - Training organization utilities
 
 ### 2. **Documentation**
-- ✅ `TRAINING_DATA_MANAGEMENT_GUIDE.md` - Complete system documentation
-- ✅ `TRAINING_QUICKSTART_GUIDE.md` - Quick reference guide
-- ✅ `ARCHIVE_ORGANIZATION_PLAN_V2.md` - Directory structure design
-- ✅ `training_session_readme_main.md` - Template for main training README
+- ✅ `documentation/training_guides/TRAINING_DATA_MANAGEMENT_GUIDE.md` - Complete system documentation
+- ✅ `documentation/training_guides/TRAINING_QUICKSTART_GUIDE.md` - Quick reference guide
+- ✅ `documentation/project_overview/ARCHIVE_ORGANIZATION_PLAN_V2.md` - Directory structure design
+- ✅ `training_data/README_TEMPLATE.md` - Template for training session documentation
 
 ### 3. **Metadata Templates**
 - ✅ Manifest.json schema with complete configuration tracking
@@ -28,16 +28,14 @@ I've implemented a complete training data management system for your mobile mani
 ### Quick Setup (3 commands):
 
 ```bash
-# 1. Organize your existing files
-chmod +x organize_archives.sh
-./organize_archives.sh
+# 1. Create new training session
+python tools/training/create_training_session.py --algorithm dqn --feature dual_intensity
 
-# 2. Create metadata files
-python3 create_manifest.py
+# 2. Run training simulation
+python src/simulation/sim_husky_kuka.py
 
-# 3. Copy README to main training session
-cp training_session_readme_main.md \
-   archives/02_training_sessions/training_20251016_dqn_dual_intensity_500ep_v1.0/README.md
+# 3. Query training results
+python tools/training/query_training_sessions.py --list
 ```
 
 ### After Setup, You Can:

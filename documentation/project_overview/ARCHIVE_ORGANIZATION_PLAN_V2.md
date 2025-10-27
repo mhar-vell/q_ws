@@ -6,28 +6,63 @@ Instead of mixing all training results, we organize by **specific training runs*
 
 ---
 
-## 📁 Enhanced Directory Structure
+## 📁 Current Professional Directory Structure
 
 ```
 q_ws/
 │
-├── 📂 archives/
+├── 📂 src/                              # Core Application Code
+│   ├── 📂 simulation/
+│   │   ├── sim_husky_kuka.py           # Main simulation (2,263 lines)
+│   │   └── rl_mission_env.py           # RL environment & agents
+│   ├── 📂 planning/
+│   │   ├── rl_trajectory_planner.py    # Trajectory planning
+│   │   └── trajectory_generators.py    # Trajectory utilities
+│   └── 📂 config/
+│       └── rl_config.py               # Configuration management
+│
+├── 📂 tools/                           # Management & Automation
+│   ├── 📂 training/
+│   │   ├── create_training_session.py  # Session creation
+│   │   ├── query_training_sessions.py  # Session querying
+│   │   └── create_manifest.py          # Metadata generation
+│   └── 📂 data/
+│       └── experiment_index.json       # Master project index
+│
+├── 📂 training_data/                   # Phase-Based Training Organization
+│   ├── training_overview.md            # Master research overview
+│   ├── 📂 phase_01_baseline_testing/   # Algorithm comparison
+│   │   ├── 📂 qlearning_baseline/      # Q-Learning: 41.3% ✅
+│   │   ├── 📂 dqn_baseline/            # DQN baseline (pending) ❌
+│   │   └── phase_01_summary.md         # Phase documentation
+│   ├── 📂 phase_02_dual_intensity_main/ # Main thesis experiment
+│   │   ├── 📂 dqn_dual_intensity/      # DQN: 79.9% success ✅
+│   │   │   ├── 📂 session_data/        # Complete training data
+│   │   │   │   ├── manifest.json       # Session metadata
+│   │   │   │   ├── README.md           # Session documentation
+│   │   │   │   ├── checkpoints/        # Training checkpoints
+│   │   │   │   ├── final_models/       # Trained models
+│   │   │   │   └── metrics/            # Performance data
+│   │   │   └── 📂 raw_data/            # Episode data & summaries
+│   │   ├── 📂 qlearning_dual_intensity/ # Q-Learning dual (pending) ❌
+│   │   └── phase_02_summary.md         # Phase documentation
+│   └── 📂 consolidated_models/         # All trained models
+│
+├── 📂 documentation/                   # Project Documentation
+│   ├── 📂 disturbance_system/
+│   │   ├── DISTURBANCE_COMPENSATION.md
+│   │   ├── DISTURBANCE_EXPLANATION_CORRECTED.md
+│   │   ├── DISTURBANCE_FINDINGS.md
+│   │   ├── DISTURBANCE_QUICK_REF.md
+│   │   └── DISTURBANCE_REVIEW.md
 │   │
-│   ├── 📂 01_documentation/
-│   │   ├── 📂 disturbance_system/
-│   │   │   ├── DISTURBANCE_COMPENSATION.md
-│   │   │   ├── DISTURBANCE_EXPLANATION_CORRECTED.md
-│   │   │   ├── DISTURBANCE_FINDINGS.md
-│   │   │   ├── DISTURBANCE_QUICK_REF.md
-│   │   │   └── DISTURBANCE_REVIEW.md
-│   │   │
-│   │   ├── 📂 training_guides/
-│   │   │   ├── DUAL_INTENSITY_TRAINING_SUMMARY.md
-│   │   │   ├── TRAINING_CHECKLIST.md
-│   │   │   ├── TRAINING_EPISODES_CONFIG.md
-│   │   │   ├── TRAINING_WORKFLOW.md
-│   │   │   ├── TIMEOUT_EXPLANATION.md
-│   │   │   └── AUTOMATIC_TRAINING_COMPLETE.md
+│   ├── 📂 training_guides/
+│   │   ├── DUAL_INTENSITY_TRAINING_SUMMARY.md
+│   │   ├── TRAINING_CHECKLIST.md
+│   │   ├── TRAINING_EPISODES_CONFIG.md
+│   │   ├── TRAINING_WORKFLOW.md
+│   │   ├── TIMEOUT_EXPLANATION.md
+│   │   └── AUTOMATIC_TRAINING_COMPLETE.md
 │   │   │
 │   │   ├── 📂 optimization/
 │   │   │   ├── PERFORMANCE_OPTIMIZATION.md

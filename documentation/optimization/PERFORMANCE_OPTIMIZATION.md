@@ -219,7 +219,7 @@ Speedup: 5x FASTER TRAINING! 🎉
 
 **Before Fix:**
 ```bash
-python3 sim_husky_kuka.py
+python3 src/simulation/sim_husky_kuka.py
 # Press 't' to start training
 → Warning appears
 → Training is slower
@@ -227,7 +227,7 @@ python3 sim_husky_kuka.py
 
 **After Fix:**
 ```bash
-python3 sim_husky_kuka.py
+python3 src/simulation/sim_husky_kuka.py
 # Press 't' to start training
 → No warning! ✓
 → Training is 5-7x faster! ✓

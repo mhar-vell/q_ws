@@ -73,7 +73,7 @@ Visualization:
 ## ⚙️ Training Configuration
 
 ```python
-# Location: sim_husky_kuka.py lines 934-974
+# Location: src/simulation/sim_husky_kuka.py lines 934-974
 DISTURBANCE_SCENARIOS = ['none', 'random', 'periodic', 'continuous', 'impulse']
 EPISODES_PER_SCENARIO = 100
 TRAINING_STEPS_PER_EPISODE = 200
@@ -105,7 +105,7 @@ Checkpoints saved: Every 100 episodes (5 checkpoints)
 
 ### 1. Start Training
 ```bash
-python3 sim_husky_kuka.py
+python3 src/simulation/sim_husky_kuka.py
 # In simulation window: Press 't'
 # Watch console for scenario transitions
 ```
@@ -148,7 +148,7 @@ Best for: Quick experiments, small workspaces
 Best for: Complex tasks, production systems
 ```
 
-**Toggle in:** `sim_husky_kuka.py` line 468
+**Toggle in:** `src/simulation/sim_husky_kuka.py` line 468
 ```python
 USE_DQN = True   # Deep Q-Network (recommended)
 USE_DQN = False  # Tabular Q-Learning (faster)
@@ -159,7 +159,7 @@ USE_DQN = False  # Tabular Q-Learning (faster)
 ## 🔧 Parameter Tuning Cheat Sheet
 
 ### IMU Thresholds (Sensitivity)
-**File:** `sim_husky_kuka.py` lines 1130-1131
+**File:** `src/simulation/sim_husky_kuka.py` lines 1130-1131
 ```python
 # Conservative (trigger early)
 max_stable_accel = 2.0   # Default: 5.0
@@ -244,7 +244,7 @@ Checkpoint saved: rl_checkpoint_episode_200_dqn.pkl
 ### Problem: Training crashes
 ```bash
 Solution: Check PyBullet connection
-→ Ensure sim_husky_kuka.py has p.connect(p.GUI) at line 2
+→ Ensure src/simulation/sim_husky_kuka.py has p.connect(p.GUI) at line 2
 ```
 
 ### Problem: Robot tips over constantly
@@ -257,7 +257,7 @@ Solution: Reduce disturbance intensity
 ### Problem: Training too slow
 ```bash
 Solution: Switch to Q-Learning
-→ Set USE_DQN = False in sim_husky_kuka.py line 468
+→ Set USE_DQN = False in src/simulation/sim_husky_kuka.py line 468
 → Or reduce EPISODES_PER_SCENARIO to 50
 ```
 

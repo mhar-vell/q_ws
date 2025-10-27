@@ -2,37 +2,40 @@
 
 ## 🚀 Setup (One-Time)
 
-### Step 1: Organize Existing Data
+### Step 1: Setup Training Environment
 ```bash
-# Make the script executable
-chmod +x organize_archives.sh
+# Ensure Python environment is active
+conda activate mobile_manipulator_rl
 
-# Run the organization script
-./organize_archives.sh
+# Verify core application is accessible
+python src/simulation/sim_husky_kuba.py --version
 ```
 
-This will:
-- Create the `archives/` directory structure
-- Move all documentation files to proper categories
-- Organize training results by session
-- Separate test scripts and visualization tools
+This ensures:
+- Proper Python environment setup
+- Core simulation modules are accessible
+- All dependencies are installed correctly
 
-### Step 2: Create Metadata
+### Step 2: Create New Training Session
 ```bash
-# Generate manifest files and experiment index
-python3 create_manifest.py
+# Generate new training session with automated structure
+python tools/training/create_training_session.py \
+    --algorithm dqn \
+    --feature dual_intensity \
+    --episodes 500 \
+    --version 1.0
 ```
 
 This creates:
-- `archives/02_training_sessions/training_20251016_dqn_dual_intensity_500ep_v1.0/manifest.json`
-- `archives/02_training_sessions/training_20251014_qlearning_test_50ep_v0.9/manifest.json`
-- `experiment_index.json` (master index)
+- `training_data/phase_02_dual_intensity_main/dqn_dual_intensity/session_data/manifest.json`
+- Complete session directory structure
+- `tools/data/experiment_index.json` (master index)
 
 ### Step 3: Add README to Training Sessions
 ```bash
 # Copy README to main training session
 cp training_session_readme_main.md \
-   archives/02_training_sessions/training_20251016_dqn_dual_intensity_500ep_v1.0/README.md
+   training_data/phase_02_dual_intensity_main/training_20251016_dqn_dual_intensity_500ep_v1.0/README.md
 ```
 
 ---
@@ -41,7 +44,7 @@ cp training_session_readme_main.md \
 
 ### List All Training Sessions
 ```bash
-python3 query_training_sessions.py --list
+python3 tools/training/query_training_sessions.py --list
 ```
 
 **Output:**
@@ -63,17 +66,17 @@ python3 query_training_sessions.py --list
 
 ### Filter by Status
 ```bash
-python3 query_training_sessions.py --list --status completed
+python3 tools/training/query_training_sessions.py --list --status completed
 ```
 
 ### Filter by Tags
 ```bash
-python3 query_training_sessions.py --list --tags thesis-main publication
+python3 tools/training/query_training_sessions.py --list --tags thesis-main publication
 ```
 
-### Compare Training Sessions
+### Compare Multiple Sessions
 ```bash
-python3 query_training_sessions.py --compare \
+python3 tools/training/query_training_sessions.py --compare \
     training_20251016_dqn_dual_intensity_500ep_v1.0 \
     training_20251014_qlearning_test_50ep_v0.9
 ```
@@ -87,9 +90,9 @@ training_20251016_dqn_dual_inte...   DQN        500       79.9         85.2     
 training_20251014_qlearning_tes...   Q-Learning 50        41.3         N/A        N/A
 ```
 
-### Find Best Session
+### Find Best Performing Session
 ```bash
-python3 query_training_sessions.py --best overall_success_rate
+python3 tools/training/query_training_sessions.py --best overall_success_rate
 ```
 
 ---
@@ -100,7 +103,7 @@ python3 query_training_sessions.py --best overall_success_rate
 
 ```bash
 # Create new training session structure
-python3 create_training_session.py \
+python3 tools/training/create_training_session.py \
     --algorithm rainbow \
     --feature triple_intensity \
     --episodes 1000 \
@@ -110,6 +113,19 @@ python3 create_training_session.py \
 ```
 
 **This creates:**
+```
+training_data/phase_03_future_experiments/training_20251121_rainbow_triple_intensity_1000ep_v2.0/
+├── config/
+│   ├── training_config.json
+│   └── experiment_config.json
+├── checkpoints/
+├── final_models/
+├── metrics/
+├── analysis/
+├── videos/
+├── manifest.json
+└── README.md
+```
 ```
 archives/02_training_sessions/training_20251121_rainbow_triple_intensity_1000ep_v2.0/
 ├── config/
@@ -132,9 +148,9 @@ archives/02_training_sessions/training_20251121_rainbow_triple_intensity_1000ep_
 Modify your training script to save to the new session:
 
 ```python
-# In sim_husky_kuka.py or your training script
-
-SESSION_DIR = "archives/02_training_sessions/training_20251121_rainbow_triple_intensity_1000ep_v2.0"
+# In src/simulation/sim_husky_kuka.py or your training script
+import json
+SESSION_DIR = "training_data/phase_03_future_experiments/training_20251121_rainbow_triple_intensity_1000ep_v2.0"
 
 # Save checkpoints
 checkpoint_path = f"{SESSION_DIR}/checkpoints/{scenario}_scenario/rl_checkpoint_{scenario}_ep{episode}.pth"
@@ -158,15 +174,15 @@ plt.savefig(plot_path)
 
 ```bash
 # Update manifest with results
-# Edit: archives/02_training_sessions/SESSION_ID/manifest.json
+# Edit: training_data/PHASE_XX/SESSION_ID/manifest.json
 # Add: results_summary section
 
 # Update README
-# Edit: archives/02_training_sessions/SESSION_ID/README.md
+# Edit: training_data/PHASE_XX/SESSION_ID/README.md
 # Update: Results section, mark checkboxes complete
 
 # Query to see new session
-python3 query_training_sessions.py --list
+python3 tools/training/query_training_sessions.py --list
 ```
 
 ---
@@ -176,9 +192,9 @@ python3 query_training_sessions.py --list
 ```
 q_ws/
 │
-├── archives/
-│   ├── 01_documentation/          # All .md guides
-│   ├── 02_training_sessions/      # Each training isolated
+├── training_data/
+│   ├── phase_01_baseline_testing/        # Baseline experiments
+│   ├── phase_02_dual_intensity_main/     # Main study
 │   │   ├── training_20251016_dqn_dual_intensity_500ep_v1.0/
 │   │   │   ├── manifest.json      # Complete metadata
 │   │   │   ├── README.md          # Human-readable summary
@@ -190,22 +206,24 @@ q_ws/
 │   │   │   └── videos/            # Recordings
 │   │   └── training_20251121_rainbow_triple_intensity_1000ep_v2.0/
 │   │       └── [same structure]
-│   ├── 03_comparative_analysis/   # Cross-session comparisons
-│   ├── 04_test_scripts/           # Unit/integration tests
-│   ├── 05_visualization_tools/    # Plotting scripts
-│   └── 06_experiment_logs/        # Timeline, lessons learned
+│   └── phase_03_future_experiments/      # Future work
 │
-├── experiment_index.json          # Master index of all trainings
-├── create_training_session.py     # Create new session
-├── query_training_sessions.py     # Query/compare sessions
-├── create_manifest.py             # Generate metadata
-├── organize_archives.sh           # Organize files
+├── tools/
+│   ├── training/
+│   │   ├── create_training_session.py    # Create new session
+│   │   ├── query_training_sessions.py    # Query/compare sessions
+│   │   └── create_manifest.py            # Generate metadata
+│   ├── setup/
+│   │   └── organize_archives.sh          # Organize files
+│   └── data/
 │
-└── [core development files]       # Active code
-    ├── sim_husky_kuka.py
-    ├── rl_mission_env.py
-    ├── rl_trajectory_planner.py
-    └── ...
+├── src/
+│   ├── simulation/
+│   │   ├── sim_husky_kuka.py
+│   │   └── rl_mission_env.py
+│   ├── planning/
+│   │   └── rl_trajectory_planner.py
+│   └── config/
 ```
 
 ---
@@ -214,7 +232,7 @@ q_ws/
 
 ### "Which training was for my thesis?"
 ```bash
-python3 query_training_sessions.py --list --tags thesis-main
+python3 tools/training/query_training_sessions.py --list --tags thesis-main
 ```
 
 ### "Show me all DQN trainings"
@@ -226,12 +244,13 @@ cat experiment_index.json | jq '.training_sessions[] | select(.algorithm=="DQN")
 ### "What were the exact hyperparameters?"
 ```bash
 # Check manifest
-cat archives/02_training_sessions/SESSION_ID/manifest.json | jq .algorithm
+cat training_data/PHASE_XX/SESSION_ID/manifest.json | jq .algorithm
 ```
 
 ### "Get all analysis plots from Oct 16 training"
 ```bash
-ls archives/02_training_sessions/training_20251016_dqn_dual_intensity_500ep_v1.0/analysis/
+# List all plots in analysis folder
+ls training_data/phase_02_dual_intensity_main/training_20251016_dqn_dual_intensity_500ep_v1.0/analysis/
 ```
 
 ### "Compare this month vs next month training"

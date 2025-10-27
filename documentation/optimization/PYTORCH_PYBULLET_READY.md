@@ -139,7 +139,7 @@ Your environment is **perfectly configured** and **optimally setup** for RL trai
 ### Option 1: Start Training Immediately
 
 ```bash
-python3 sim_husky_kuka.py
+python3 src/simulation/sim_husky_kuka.py
 # Press 't' to start training
 # Watch the magic happen! ✨
 ```
@@ -148,10 +148,11 @@ python3 sim_husky_kuka.py
 
 ```bash
 # Quick 30-second check
-python3 test_dqn_device.py
+python3 test_scripts/test_dqn_device.py
 
 # Then start training
-python3 sim_husky_kuka.py
+# Then start:
+python3 src/simulation/sim_husky_kuka.py
 ```
 
 ---
