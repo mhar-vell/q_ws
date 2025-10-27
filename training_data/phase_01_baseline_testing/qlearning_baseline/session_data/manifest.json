@@ -1,0 +1,39 @@
+{
+  "session_info": {
+    "session_id": "training_20251014_qlearning_test_50ep_v0.9",
+    "date_started": "2025-10-14T10:00:00Z",
+    "date_completed": "2025-10-14T10:08:00Z",
+    "duration_minutes": 8,
+    "status": "completed",
+    "git_commit": "5d6e7f8",
+    "code_version": "0.9.0",
+    "python_version": "3.11.5"
+  },
+  "algorithm": {
+    "name": "Q-Learning (Tabular)",
+    "implementation": "rl_mission_env.py::QLearningAgent",
+    "learning_rate": 0.1,
+    "discount_factor": 0.99,
+    "epsilon_start": 0.2,
+    "epsilon_end": 0.01,
+    "epsilon_decay": 0.995,
+    "state_discretization_decimals": 2
+  },
+  "training_config": {
+    "episodes": 50,
+    "scenario": "none",
+    "intensity": "normal",
+    "purpose": "Baseline comparison for algorithm study"
+  },
+  "results_summary": {
+    "success_rate": 41.3,
+    "avg_error_m": 0.047,
+    "notes": "Limited by tabular representation of 35D continuous state space"
+  },
+  "tags": [
+    "baseline-comparison",
+    "algorithm-study",
+    "qlearning",
+    "completed"
+  ]
+}

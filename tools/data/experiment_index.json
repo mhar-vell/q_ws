@@ -1,0 +1,88 @@
+{
+  "project_name": "Robust Mobile Manipulator Control via Deep Reinforcement Learning with IMU-Based Disturbance Compensation",
+  "project_short_name": "Mobile Manipulator RL",
+  "project_start_date": "2025-10-10",
+  "code_repository": "https://github.com/mhar-vell/q_ws",
+  "git_branch": "first-analysis",
+  "current_version": "1.0.0",
+  "last_updated": "2025-10-21T22:30:15.219298",
+  "training_sessions": [
+    {
+      "session_id": "training_20251016_dqn_dual_intensity_500ep_v1.0",
+      "date": "2025-10-16",
+      "algorithm": "DQN",
+      "status": "completed",
+      "primary": true,
+      "tags": [
+        "thesis-main",
+        "publication",
+        "dual-intensity"
+      ],
+      "success_rate": 79.9,
+      "robustness_index": 0.854,
+      "notes": "Main results for thesis and academic paper",
+      "manifest": "archives/02_training_sessions/training_20251016_dqn_dual_intensity_500ep_v1.0/manifest.json"
+    },
+    {
+      "session_id": "training_20251014_qlearning_test_50ep_v0.9",
+      "date": "2025-10-14",
+      "algorithm": "Q-Learning",
+      "status": "completed",
+      "primary": false,
+      "tags": [
+        "baseline-comparison",
+        "algorithm-study"
+      ],
+      "success_rate": 41.3,
+      "notes": "Q-Learning baseline for comparison",
+      "manifest": "archives/02_training_sessions/training_20251014_qlearning_test_50ep_v0.9/manifest.json"
+    }
+  ],
+  "milestones": [
+    {
+      "date": "2025-10-10",
+      "version": "0.5.0",
+      "description": "Initial RL integration with basic DQN",
+      "git_commit": "1a2b3c4"
+    },
+    {
+      "date": "2025-10-12",
+      "version": "0.7.0",
+      "description": "Virtual IMU implementation with realistic noise modeling",
+      "git_commit": "3c4d5e6"
+    },
+    {
+      "date": "2025-10-13",
+      "version": "0.8.0",
+      "description": "Single intensity training working",
+      "git_commit": "5d6e7f8"
+    },
+    {
+      "date": "2025-10-14",
+      "version": "0.9.0",
+      "description": "Dual-intensity system implemented with golden ratio scaling",
+      "git_commit": "9a0b1c2"
+    },
+    {
+      "date": "2025-10-15",
+      "version": "1.0.0",
+      "description": "Production training completed - thesis results ready",
+      "git_commit": "a3f5c2d"
+    },
+    {
+      "date": "2025-10-21",
+      "version": "1.1.0",
+      "description": "Archive organization and metadata system implemented",
+      "git_commit": "current"
+    }
+  ],
+  "statistics": {
+    "total_training_sessions": 2,
+    "total_episodes_trained": 5050,
+    "total_checkpoints": 26,
+    "total_final_models": 11,
+    "total_training_time_minutes": 50,
+    "best_success_rate": 92.4,
+    "best_scenario": "none_normal"
+  }
+}
