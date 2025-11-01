@@ -1,4 +1,6 @@
 import pybullet as p
+import argparse
+import sys
 import time
 import math
 from datetime import datetime
@@ -6,113 +8,31 @@ import pybullet_data
 import numpy as np
 import random
 import os
-import sys
-import argparse
-from rl_mission_env import MobileManipulatorEnv, QLearningAgent, DQNAgent
-from enhanced_rl_trainer import EnhancedRLTrainer
+from rl_mission_env import MobileManipulatorEnv, QLearningAgent
 import json
 from PIL import Image
 
-# === COMMAND LINE ARGUMENT PARSING ===
+
 def parse_arguments():
-    """Parse command line arguments for scenario-specific training"""
-    parser = argparse.ArgumentParser(description='Enhanced RL Training with Phase 1 Improvements')
-    parser.add_argument('--scenario', 
-                       choices=['none', 'random', 'periodic', 'continuous', 'impulse', 'all'],
-                       default='all',
-                       help='Specific scenario to train (default: all)')
-    parser.add_argument('--intensity', 
-                       choices=['normal', 'golden', 'both'],
-                       default='both',
-                       help='Intensity mode (default: both)')
-    parser.add_argument('--algorithm', 
-                       choices=['dqn', 'qlearning', 'both'],
-                       default='both',
-                       help='RL algorithm to use (default: both)')
-    parser.add_argument('--episodes', 
-                       type=int, 
-                       default=2000,
-                       help='Number of episodes per scenario (default: 2000)')
-    parser.add_argument('--headless', 
-                       action='store_true',
-                       help='Run without GUI for faster training')
-    parser.add_argument('--auto-start', 
-                       action='store_true',
-                       help='Start training automatically (no manual \'t\' press needed)')
-    parser.add_argument('--auto-shutdown', 
-                       action='store_true',
-                       help='Automatically shutdown simulation when training completes')
-    parser.add_argument('--max-frames',
-                       type=int,
-                       default=0,
-                       help='Maximum number of simulation frames to run (0 = unlimited)')
-    parser.add_argument('--auto-restart',
-                       action='store_true',
-                       help='Automatically restart simulation on decoupling detection')
-    args = parser.parse_args()
-    
-    # Validate combinations and display configuration
-    if args.scenario != 'all' and args.intensity == 'both':
-        print(f"🎯 Training scenario: {args.scenario.upper()} with BOTH intensities")
-    elif args.scenario != 'all':
-        print(f"🎯 Training scenario: {args.scenario.upper()} with {args.intensity.upper()} intensity")
-    else:
-        print(f"🎯 Training ALL scenarios with {args.intensity} intensity")
-    
-    # Algorithm configuration display
-    if args.algorithm == 'both':
-        print(f"🤖 Training algorithms: DQN + Q-Learning (sequential)")
-    elif args.algorithm == 'dqn':
-        print(f"🤖 Training algorithm: DQN only")
-    else:  # qlearning
-        print(f"🤖 Training algorithm: Q-Learning only")
-    
-    # Feature flags display
-    print(f"🚀 Auto-start: {'ENABLED' if args.auto_start else 'DISABLED'}")
-    print(f"🔄 Auto-shutdown: {'ENABLED' if args.auto_shutdown else 'DISABLED'}")
-    print(f"🔄 Auto-restart: {'ENABLED' if args.auto_restart else 'DISABLED'}")
-    if args.max_frames > 0:
-        print(f"⏱️  Frame limit: {args.max_frames}")
-    
-    return args
+  parser = argparse.ArgumentParser(
+    description='Husky+KUKA simulation (controls, RL training, and diagnostics)'
+  )
+  parser.add_argument('--headless', action='store_true', help='Run without GUI (DIRECT mode)')
+  parser.add_argument('--auto-start', action='store_true', help='Start RL training automatically on launch')
+  parser.add_argument('--scenario', choices=['none', 'random', 'periodic', 'continuous', 'impulse', 'all'], default='all', help='Training scenario to focus on')
+  parser.add_argument('--episodes', type=int, default=500, help='Number of episodes per scenario for RL training')
+  # If called without any args, print concise help so users see available flags immediately
+  if len(sys.argv) == 1:
+    parser.print_help()
+  return parser.parse_args()
 
-# Parse command line arguments
-TRAINING_ARGS = parse_arguments()
 
-# Frame limit for safety (0 = unlimited)
-MAX_FRAMES = TRAINING_ARGS.max_frames
-frame_counter = 0
-
-# Auto-shutdown flag
-auto_shutdown_requested = False
-
-# Auto-restart system variables
-auto_restart_enabled = TRAINING_ARGS.auto_restart
-restart_requested = False
-restart_counter = 0
-max_restarts = 5  # Maximum number of automatic restarts per session
-restart_episode_continuity = {}  # Track episodes across restarts
-
-# === PYBULLET CONNECTION WITH HEADLESS SUPPORT ===
-if TRAINING_ARGS.headless:
-    p.connect(p.DIRECT)  # Headless mode for faster training
-    print("🖥️  Running in headless mode (no GUI)")
+# Parse CLI args and select PyBullet connection mode
+ARGS = parse_arguments()
+if ARGS.headless:
+  p.connect(p.DIRECT)
 else:
-    p.connect(p.GUI)     # GUI mode for visual monitoring
-    print("🖼️  Running with GUI")
-
-print(f"🚀 ENHANCED RL TRAINING - Phase 1 Improvements")
-print(f"=" * 50)
-print(f"Scenario: {TRAINING_ARGS.scenario}")
-print(f"Intensity: {TRAINING_ARGS.intensity}")
-print(f"Algorithm: {TRAINING_ARGS.algorithm}")
-print(f"Episodes: {TRAINING_ARGS.episodes}")
-print(f"Mode: {'Headless' if TRAINING_ARGS.headless else 'GUI'}")
-print(f"Auto-start: {TRAINING_ARGS.auto_start}")
-print(f"Auto-shutdown: {TRAINING_ARGS.auto_shutdown}")
-if TRAINING_ARGS.max_frames > 0:
-    print(f"Max frames: {TRAINING_ARGS.max_frames}")
-print(f"=" * 50)
+  p.connect(p.GUI)
 
 # Import RL Trajectory Planner
 try:
@@ -199,7 +119,7 @@ class VirtualIMU:
         return rot_matrix.T @ vector
     
     def update_bias_drift(self):
-        """ulate realistic bias drift over time."""
+        """Simulate realistic bias drift over time."""
         # Random walk bias drift
         self.accel_bias += np.random.normal(0, self.accel_bias_instability * self.dt, 3)
         self.gyro_bias += np.random.normal(0, self.gyro_bias_instability * self.dt, 3)
@@ -292,7 +212,7 @@ class VirtualIMU:
     
     def get_orientation_estimate(self, dt=None):
         """
-        ple orientation estimation from gyroscope integration.
+        Simple orientation estimation from gyroscope integration.
         Note: This is basic integration - for production use Kalman filter.
         
         Returns:
@@ -307,7 +227,7 @@ class VirtualIMU:
         if not hasattr(self, 'estimated_orientation'):
             self.estimated_orientation = np.array([0.0, 0.0, 0.0])
         
-        # ple Euler integration (basic - can be improved)
+        # Simple Euler integration (basic - can be improved)
         self.estimated_orientation += gyro * dt
         
         return self.estimated_orientation.copy()
@@ -585,13 +505,13 @@ p.changeDynamics(husky, -1,  # Base link
                 linearDamping=0.1,          # Air resistance
                 angularDamping=0.1)         # Angular damping
 print("🤖 Husky chassis configured: 30kg mass, realistic friction and damping")
-# === KUKA IIWA ARM LOADING WITH ENHANCED DYNAMICS ===
-Id = p.loadURDF("kuka_iiwa/model.urdf", 0.193749, 0.345564, 0.120208, 0.002327,
+# === KUKA ARM LOADING WITH ENHANCED DYNAMICS ===
+kukaId = p.loadURDF("kuka_iiwa/model_free_base.urdf", 0.193749, 0.345564, 0.120208, 0.002327,
                     -0.000988, 0.996491, 0.083659)
-ob = Id
+ob = kukaId
 jointPositions = [3.559609, 0.411182, 0.862129, 1.744441, 0.077299, -1.129685, 0.006001]
 
-print("🦾 Configuring KUKA IIWA arm joint dynamics...")
+print("🦾 Configuring KUKA arm joint dynamics...")
 kuka_joint_masses = [4.0, 4.0, 3.0, 2.5, 1.5, 1.5, 0.3]  # Realistic joint masses (kg)
 for jointIndex in range(p.getNumJoints(ob)):
   joint_info = p.getJointInfo(ob, jointIndex)
@@ -612,31 +532,31 @@ for jointIndex in range(p.getNumJoints(ob)):
   
   p.resetJointState(ob, jointIndex, jointPositions[jointIndex])
 
-# Configure KUKA IIWA base link
-p.changeDynamics(Id, -1,
-                mass=15.0,                  # Realistic KUKA IIWA base mass
+# Configure KUKA base link
+p.changeDynamics(kukaId, -1,
+                mass=15.0,                  # Realistic KUKA base mass
                 lateralFriction=0.6,
                 spinningFriction=0.1,
                 rollingFriction=0.05,
                 restitution=0.1,
                 linearDamping=0.05,
                 angularDamping=0.05)
-print("🔧 KUKA IIWA base configured: 15kg mass, enhanced dynamics")
+print("🔧 KUKA base configured: 15kg mass, enhanced dynamics")
 
-#put KUKA IIWA on top of husky - CORRECTED PHYSICS
-# Fixed constraint positioning: Place KUKA IIWA arm properly on top of Husky
-# Offset [0, 0, 0.5] places the KUKA IIWA base 0.5m ABOVE the Husky center (not below)
+#put kuka on top of husky - CORRECTED PHYSICS
+# Fixed constraint positioning: Place KUKA arm properly on top of Husky
+# Offset [0, 0, 0.5] places the KUKA base 0.5m ABOVE the Husky center (not below)
 # Create COMPLIANT constraint instead of rigid fixed joint
-cid = p.createConstraint(husky, -1, Id, -1, p.JOINT_FIXED, 
+cid = p.createConstraint(husky, -1, kukaId, -1, p.JOINT_FIXED, 
                          [0, 0, 0],      # Parent frame (Husky center)
-                         [0, 0, 0],      # Child frame (KUKA IIWA base)  
+                         [0, 0, 0],      # Child frame (KUKA base)  
                          [0., 0., 0.5],  # Parent offset: 0.5m UP from Husky center
-                         [0, 0, 0, 1])   # Child offset: at KUKA IIWA base
+                         [0, 0, 0, 1])   # Child offset: at KUKA base
 # Configure constraint for STABILITY with compliance parameters
 # CRITICAL FIX: Reduced constraint force to prevent "jumping" behavior
 p.changeConstraint(cid, maxForce=2000)  # Reduced from 50,000N (96% reduction)
 
-print(f"✅ -Husky constraint created with COMPLIANT mounting:")
+print(f"✅ KUKA-Husky constraint created with COMPLIANT mounting:")
 print(f"   • Constraint ID: {cid}")
 print(f"   • Max Force: 2,000N (was 50,000N - REDUCED 96%)")
 print(f"   • ERP: 0.1 (soft error correction)")
@@ -651,7 +571,7 @@ def print_physics_diagnostics():
         
         # Get system velocities
         husky_vel = p.getBaseVelocity(husky)
-        _vel = p.getBaseVelocity(Id)
+        kuka_vel = p.getBaseVelocity(kukaId)
         
         print("\n🔬 PHYSICS DIAGNOSTICS:")
         constraint_force_magnitude = np.linalg.norm(constraint_force)
@@ -673,259 +593,10 @@ def print_physics_diagnostics():
     except:
         return True  # Assume stable if diagnostics fail
 
-def detect_husky__decoupling():
-    """
-    Comprehensive decoupling detection between Husky and 
-    Returns: (is_decoupled, severity, details)
-    """
-    try:
-        # Get constraint information
-        constraint_info = p.getConstraintInfo(cid)
-        constraint_state = p.getConstraintState(cid)
-        
-        # Get positions and orientations
-        husky_pos, husky_orn = p.getBasePositionAndOrientation(husky)
-        _pos, _orn = p.getBasePositionAndOrientation(Id)
-        
-        # Calculate relative position between Husky and 
-        relative_pos = np.array(_pos) - np.array(husky_pos)
-        relative_distance = np.linalg.norm(relative_pos)
-        
-        # Expected mounting offset ( should be ~0.5m above Husky center)
-        expected_z_offset = 0.5
-        expected_distance = expected_z_offset  # Minimal expected distance
-        
-        # Calculate constraint force magnitude
-        constraint_force_mag = np.linalg.norm(constraint_state)
-        
-        # Get velocities for relative motion analysis
-        husky_vel, husky_angvel = p.getBaseVelocity(husky)
-        _vel, _angvel = p.getBaseVelocity(Id)
-        
-        # Calculate relative velocity
-        relative_vel = np.array(_vel) - np.array(husky_vel)
-        relative_vel_mag = np.linalg.norm(relative_vel)
-        
-        # DECOUPLING DETECTION CRITERIA
-        decoupling_indicators = {
-            'distance_violation': relative_distance > (expected_distance + 0.2),  # >0.7m apart
-            'constraint_failure': constraint_force_mag > 2500,  # Exceeding safe limit
-            'excessive_relative_motion': relative_vel_mag > 2.0,  # >2 m/s relative motion
-            'z_position_error': abs(relative_pos[2] - expected_z_offset) > 0.3,  # Z-axis misalignment
-            'constraint_force_zero': constraint_force_mag < 0.1,  # No constraint force (broken)
-        }
-        
-        # Count active indicators
-        active_indicators = [key for key, value in decoupling_indicators.items() if value]
-        
-        # Determine decoupling severity
-        if len(active_indicators) >= 3:
-            severity = "CRITICAL"
-            is_decoupled = True
-        elif len(active_indicators) >= 2:
-            severity = "HIGH"
-            is_decoupled = True
-        elif len(active_indicators) >= 1:
-            severity = "WARNING"
-            is_decoupled = False
-        else:
-            severity = "NORMAL"
-            is_decoupled = False
-        
-        # Detailed analysis
-        details = {
-            'relative_distance': relative_distance,
-            'expected_distance': expected_distance,
-            'constraint_force': constraint_force_mag,
-            'relative_velocity': relative_vel_mag,
-            'z_offset_error': abs(relative_pos[2] - expected_z_offset),
-            'active_indicators': active_indicators,
-            'positions': {'husky': husky_pos, '': _pos},
-            'velocities': {'husky': husky_vel, '': _vel}
-        }
-        
-        return is_decoupled, severity, details
-        
-    except Exception as e:
-        print(f"⚠️ Decoupling detection failed: {e}")
-        return False, "UNKNOWN", {}
-
-def print_decoupling_diagnostics():
-    """Print comprehensive decoupling analysis"""
-    is_decoupled, severity, details = detect_husky__decoupling()
-    
-    if severity in ["WARNING", "HIGH", "CRITICAL"]:
-        print(f"\n🚨 DECOUPLING ANALYSIS - {severity} LEVEL:")
-        print(f"   Decoupled: {'YES' if is_decoupled else 'NO'}")
-        print(f"   Distance: {details.get('relative_distance', 0):.3f}m (expected: {details.get('expected_distance', 0):.3f}m)")
-        print(f"   Constraint Force: {details.get('constraint_force', 0):.1f}N")
-        print(f"   Relative Velocity: {details.get('relative_velocity', 0):.2f}m/s")
-        print(f"   Z-offset Error: {details.get('z_offset_error', 0):.3f}m")
-        
-        if details.get('active_indicators'):
-            print(f"   Active Issues: {', '.join(details['active_indicators'])}")
-            
-        if is_decoupled:
-            print(f"   🔴 DECOUPLING DETECTED - System integrity compromised!")
-            print(f"   💡 Recommendation: Reset simulation or reduce disturbance intensity")
-    
-    return is_decoupled, severity, details
-
-def request_simulation_restart(reason="Unknown"):
-    """Request a simulation restart with reason logging"""
-    global restart_requested, restart_counter
-    
-    if not auto_restart_enabled:
-        print(f"🚫 Auto-restart disabled - would restart due to: {reason}")
-        return False
-    
-    if restart_counter >= max_restarts:
-        print(f"❌ Maximum restarts ({max_restarts}) reached - stopping auto-restart")
-        print(f"   Reason for final restart attempt: {reason}")
-        return False
-    
-    restart_requested = True
-    restart_counter += 1
-    
-    print(f"\n🔄 SIMULATION RESTART REQUESTED (#{restart_counter}/{max_restarts})")
-    print(f"   Reason: {reason}")
-    print(f"   Frame: {frame_counter}")
-    
-    return True
-
-def save_restart_checkpoint():
-    """Save current training state for restart continuity"""
-    global restart_episode_continuity
-    
-    try:
-        checkpoint = {
-            'restart_count': restart_counter,
-            'frame_counter': frame_counter,
-            'timestamp': time.time(),
-            'training_state': {}
-        }
-        
-        # Save RL training state if active
-        if 'rl_training_mode' in globals() and rl_training_mode:
-            checkpoint['training_state'] = {
-                'current_combination_idx': rl_current_combination_idx if 'rl_current_combination_idx' in globals() else 0,
-                'current_episode': rl_current_episode if 'rl_current_episode' in globals() else 0,
-                'step_counter': rl_step_counter if 'rl_step_counter' in globals() else 0,
-                'metrics': rl_metrics if 'rl_metrics' in globals() else {}
-            }
-        
-        # Save to file
-        checkpoint_file = f'restart_checkpoint_{int(time.time())}.json'
-        with open(checkpoint_file, 'w') as f:
-            json.dump(checkpoint, f, indent=2)
-        
-        print(f"💾 Restart checkpoint saved: {checkpoint_file}")
-        return checkpoint_file
-        
-    except Exception as e:
-        print(f"⚠️ Failed to save restart checkpoint: {e}")
-        return None
-
-def execute_simulation_restart():
-    """Execute the actual simulation restart"""
-    global restart_requested
-    
-    if not restart_requested:
-        return False
-    
-    print(f"\n🔄 EXECUTING SIMULATION RESTART #{restart_counter}")
-    
-    # Save checkpoint before restart
-    checkpoint_file = save_restart_checkpoint()
-    
-    try:
-        # Disconnect current PyBullet session
-        print("🔌 Disconnecting PyBullet...")
-        p.disconnect()
-        
-        # Brief pause for cleanup
-        time.sleep(0.5)
-        
-        # Reconnect PyBullet
-        print("🔌 Reconnecting PyBullet...")
-        if TRAINING_ARGS.headless:
-            p.connect(p.DIRECT)
-        else:
-            p.connect(p.GUI)
-        
-        print(f"✅ simulation restart #{restart_counter} completed")
-        restart_requested = False
-        
-        # Reset some global counters but preserve training progress
-        global frame_counter
-        frame_counter = 0  # Reset frame counter for new session
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ simulation restart failed: {e}")
-        restart_requested = False
-        return False
-
-def load_restart_checkpoint():
-    """Load the most recent restart checkpoint if available"""
-    global restart_episode_continuity
-    
-    try:
-        import glob
-        checkpoint_files = glob.glob('restart_checkpoint_*.json')
-        
-        if not checkpoint_files:
-            return None
-        
-        # Get most recent checkpoint
-        latest_checkpoint = max(checkpoint_files, key=os.path.getctime)
-        
-        with open(latest_checkpoint, 'r') as f:
-            checkpoint = json.load(f)
-        
-        print(f"📂 Loading restart checkpoint: {latest_checkpoint}")
-        restart_episode_continuity = checkpoint
-        
-        return checkpoint
-        
-    except Exception as e:
-        print(f"⚠️ Failed to load restart checkpoint: {e}")
-        return None
-
-def update_episode_continuity():
-    """Update episode tracking across potential restarts"""
-    global restart_episode_continuity
-    
-    # Store current episode state in global continuity tracker
-    if 'rl_training_mode' in globals() and rl_training_mode:
-        current_state = {
-            'combination_idx': rl_current_combination_idx if 'rl_current_combination_idx' in globals() else 0,
-            'episode': rl_current_episode if 'rl_current_episode' in globals() else 0,
-            'step_counter': rl_step_counter if 'rl_step_counter' in globals() else 0,
-            'frame_counter': frame_counter,
-            'restart_count': restart_counter
-        }
-        restart_episode_continuity['current_state'] = current_state
-
-def get_continuous_episode_number():
-    """Get episode number accounting for restarts"""
-    base_episode = rl_current_episode if 'rl_current_episode' in globals() else 0
-    
-    # Add episodes from previous restarts if available
-    if restart_episode_continuity and 'training_state' in restart_episode_continuity:
-        previous_episodes = restart_episode_continuity['training_state'].get('current_episode', 0)
-        return base_episode + previous_episodes
-    
-    return base_episode
-
 # Initialize physics monitoring
 physics_diagnostics_counter = 0
 physics_diagnostics_interval = 300  # Check every 5 seconds (at 60fps)
-decoupling_check_counter = 0
-decoupling_check_interval = 60    # Check decoupling every 1 second (at 60fps)
 print("📊 Physics diagnostics monitoring initialized (5s intervals)")
-print("🔍 Decoupling detection initialized (1s intervals)")
 
 # === DISTURBANCE SCENARIO FUNCTIONS ===
 class DisturbanceManager:
@@ -1211,9 +882,9 @@ print("🌪️  Disturbance scenarios ready - Starting with 'NONE' scenario")
 husky_imu = VirtualIMU(robot_id=husky, link_index=-1, sample_rate=60.0)
 print("Husky IMU initialized on base link")
 
-# Optional: Create IMU on  arm (end-effector or specific link)
-_imu = VirtualIMU(robot_id=Id, link_index=6, sample_rate=60.0)  # Link 6 is near end-effector
-print(" IMU initialized on link 6 (near end-effector)")
+# Optional: Create IMU on KUKA arm (end-effector or specific link)
+kuka_imu = VirtualIMU(robot_id=kukaId, link_index=6, sample_rate=60.0)  # Link 6 is near end-effector
+print("KUKA IMU initialized on link 6 (near end-effector)")
 
 # IMU data logging
 imu_log_interval = 60  # Log every 60 frames (1 second at 60fps)
@@ -1344,30 +1015,35 @@ print("Photo manager initialized - Use 'p' to capture screenshots")
 rl_planner = None
 rl_training_mode = False
 rl_execution_mode = False
+rl_start_time = None
 
 if RL_AVAILABLE:
+  try:
+    # Prefer an explicit keyword for the KUKA id to avoid fragile positional mismatches.
     try:
-        rl_planner = integrate_with_husky_simulation(husky, Id)
-        print("🤖 RL Trajectory Planner initialized successfully")
-        print("   Use 't' to toggle RL training mode")
-        print("   Use 'e' to toggle RL execution mode")  
-        print("   Use 'l' to load RL model")
-        print("   Use 'q' to test disturbance rejection")
-    except Exception as e:
-        print(f"❌ Failed to initialize RL planner: {e}")
-        RL_AVAILABLE = False
+      rl_planner = integrate_with_husky_simulation(husky, kuka_id=kukaId)
+    except TypeError:
+      # Fallback to positional call if the planner function uses a different signature
+      rl_planner = integrate_with_husky_simulation(husky, kukaId)
+
+    print("🤖 RL Trajectory Planner initialized successfully")
+    print("   Use 't' to toggle RL training mode")
+    print("   Use 'e' to toggle RL execution mode")  
+    print("   Use 'l' to load RL model")
+    print("   Use 'q' to test disturbance rejection")
+  except Exception as e:
+    print(f"❌ Failed to initialize RL planner: {e}")
+    RL_AVAILABLE = False
 
 
 # === RL ENVIRONMENT AND AGENT INITIALIZATION ===
-# After Husky and  are loaded:
+# After Husky and KUKA are loaded:
 rl_goal_pose = np.array([1.0, 0.0, 0.5, 0.0])  # Example goal pose (x, y, z, orientation)
-rl_env = MobileManipulatorEnv(pybullet_client=p, husky_id=husky, _id=Id, goal_pose=rl_goal_pose)
+rl_env = MobileManipulatorEnv(pybullet_client=p, husky_id=husky, kuka_id=kukaId, goal_pose=rl_goal_pose)
 
 # === CHOOSE RL ALGORITHM ===
-# ALGORITHM SELECTION: Based on command-line arguments
-TRAIN_BOTH_ALGORITHMS = (TRAINING_ARGS.algorithm == 'both')
-USE_DQN_ONLY = (TRAINING_ARGS.algorithm == 'dqn') 
-USE_QLEARNING_ONLY = (TRAINING_ARGS.algorithm == 'qlearning')
+# DUAL ALGORITHM SETUP: Both Q-Learning and DQN available
+TRAIN_BOTH_ALGORITHMS = True  # Set to True to train both and compare performance
 
 if TRAIN_BOTH_ALGORITHMS:
     # Initialize both agents for comparison
@@ -1387,100 +1063,57 @@ if TRAIN_BOTH_ALGORITHMS:
         print(f"   🔄 Press 'k' to switch between algorithms during training")
         
     except Exception as e:
-        print(f"⚠️  Error initializing dual agents ({e}), falling back to single DQN")
+        print(f"⚠️  Error initializing dual agents ({e}), using single DQN")
         TRAIN_BOTH_ALGORITHMS = False
-        USE_DQN_ONLY = True
         from rl_mission_env import DQNAgent
-        # PHASE 1 UPGRADE: Enhanced DQN with optimized hyperparameters
-        rl_agent = DQNAgent(
-            state_dim=rl_env.state_dim, 
-            action_dim=rl_env.action_dim, 
-            alpha=0.0003,  # Optimized learning rate
-            gamma=0.99,
-            epsilon=1.0    # Start with full exploration
-        )
+        rl_agent = DQNAgent(state_dim=rl_env.state_dim, action_dim=rl_env.action_dim, alpha=0.001)
         rl_current_algorithm = "DQN"
         print(f"✅ Using Deep Q-Network (DQN) agent")
 
-elif USE_DQN_ONLY:
-    # DQN only mode
-    try:
-        from rl_mission_env import DQNAgent
-        # PHASE 1 UPGRADE: Enhanced DQN with optimized hyperparameters
-        rl_agent = DQNAgent(
-            state_dim=rl_env.state_dim, 
-            action_dim=rl_env.action_dim, 
-            alpha=0.0003,  # Optimized learning rate
-            gamma=0.99,
-            epsilon=1.0    # Start with full exploration
-        )
-        rl_current_algorithm = "DQN"
-        print(f"🤖 DQN-ONLY MODE ENABLED:")
-        print(f"   ✅ Deep Q-Network (DQN) agent initialized")
-        print(f"   🎯 Training DQN algorithm exclusively")
-    except Exception as e:
-        print(f"⚠️  DQN not available ({e}), falling back to Q-Learning")
-        USE_QLEARNING_ONLY = True
-
-elif USE_QLEARNING_ONLY:
-    # Q-Learning only mode  
-    try:
+if not TRAIN_BOTH_ALGORITHMS:
+    # Single algorithm mode (original behavior)
+    USE_DQN = True  # Set to False to use tabular Q-Learning instead
+    
+    if USE_DQN:
+        try:
+            from rl_mission_env import DQNAgent
+            rl_agent = DQNAgent(state_dim=rl_env.state_dim, action_dim=rl_env.action_dim, alpha=0.001)
+            rl_current_algorithm = "DQN"
+            print(f"✅ Using Deep Q-Network (DQN) agent")
+        except Exception as e:
+            print(f"⚠️  DQN not available ({e}), falling back to Q-Learning")
+            from rl_mission_env import QLearningAgent
+            rl_agent = QLearningAgent(state_dim=rl_env.state_dim, action_dim=rl_env.action_dim)
+            rl_current_algorithm = "Q-Learning"
+    else:
         from rl_mission_env import QLearningAgent
         rl_agent = QLearningAgent(state_dim=rl_env.state_dim, action_dim=rl_env.action_dim)
         rl_current_algorithm = "Q-Learning"
-        print(f"🤖 Q-LEARNING-ONLY MODE ENABLED:")
-        print(f"   ✅ Tabular Q-Learning agent initialized")
-        print(f"   🎯 Training Q-Learning algorithm exclusively")
-    except Exception as e:
-        print(f"⚠️  Q-Learning not available ({e}), falling back to DQN")
-        # Fallback to DQN
-        from rl_mission_env import DQNAgent
-        rl_agent = DQNAgent(
-            state_dim=rl_env.state_dim, 
-            action_dim=rl_env.action_dim, 
-            alpha=0.0003,
-            gamma=0.99,
-            epsilon=1.0
-        )
-        rl_current_algorithm = "DQN"
-        print(f"✅ Using Deep Q-Network (DQN) agent (fallback)")
+        print(f"✅ Using Tabular Q-Learning agent")
 
-# Legacy compatibility check (for old code that might reference this)
-# All algorithm initialization is now handled above based on command-line arguments
-
-# === RL SCENARIOS AND METRICS (COMMAND-LINE CONFIGURABLE) ===
-# Build scenarios based on command line arguments
-if TRAINING_ARGS.scenario == 'all':
-    rl_scenarios = ['none', 'random', 'periodic', 'continuous', 'impulse']
-    print(f"🎯 Training ALL scenarios: {rl_scenarios}")
-else:
-    rl_scenarios = [TRAINING_ARGS.scenario]
-    print(f"🎯 Training SINGLE scenario: {TRAINING_ARGS.scenario.upper()}")
-
-# Build intensity levels based on command line arguments
-if TRAINING_ARGS.intensity == 'both':
-    rl_intensity_levels = ['normal', 'golden']
-    print(f"⚡ Training BOTH intensities: normal + golden")
-elif TRAINING_ARGS.intensity == 'normal':
-    rl_intensity_levels = ['normal']
-    print(f"⚡ Training NORMAL intensity only")
-else:  # golden
-    rl_intensity_levels = ['golden']
-    print(f"⚡ Training GOLDEN intensity only")
-
-# Create scenario-intensity combinations based on arguments
-rl_training_combinations = []
-for scenario in rl_scenarios:
-    for intensity in rl_intensity_levels:
-        rl_training_combinations.append({'scenario': scenario, 'intensity': intensity})
-
-print(f"📊 Total training combinations: {len(rl_training_combinations)}")
-for combo in rl_training_combinations:
-    emoji = "⚡" if combo['intensity'] == 'golden' else "📊"
-    print(f"   {emoji} {combo['scenario'].upper()}_{combo['intensity'].upper()}")
+# === RL SCENARIOS AND METRICS ===
+rl_scenarios = [
+  'none',
+  'random',
+  'periodic',
+  'continuous',
+  'impulse'
+]
 
 # Enhanced training with intensity levels
-rl_use_dual_intensity = len(rl_intensity_levels) > 1
+rl_intensity_levels = ['normal', 'golden']
+rl_use_dual_intensity = True  # Set to False to use only normal intensity
+
+# Create comprehensive scenario-intensity combinations
+if rl_use_dual_intensity:
+    rl_training_combinations = []
+    for scenario in rl_scenarios:
+        for intensity in rl_intensity_levels:
+            rl_training_combinations.append({'scenario': scenario, 'intensity': intensity})
+    print(f"🎯 Dual-Intensity Training: {len(rl_training_combinations)} combinations")
+else:
+    rl_training_combinations = [{'scenario': s, 'intensity': 'normal'} for s in rl_scenarios]
+    print(f"🎯 Standard Training: {len(rl_training_combinations)} scenarios")
 
 # Metrics tracking for scenario-intensity combinations
 rl_metrics = {}
@@ -1500,32 +1133,21 @@ if TRAIN_BOTH_ALGORITHMS:
     rl_sequential_training_status = {'first_algorithm_completed': False, 'both_completed': False}
 
 # === RL TRAINING LOOP HOOK ===
-# Use command-line arguments to configure training
-rl_training_enabled = TRAINING_ARGS.auto_start
-rl_training_mode = False  # Toggle during simulation with 't' key
+rl_training_enabled = True  # Set to True to enable automatic training on startup
+rl_training_mode = True  # Toggle during simulation with 't' key
 
-# Use command-line episodes override or default
-if TRAINING_ARGS.episodes:
-    rl_num_episodes = TRAINING_ARGS.episodes
-    print(f"🎯 Using CUSTOM episodes count: {rl_num_episodes}")
-else:
-    # PHASE 1 ENHANCED Training Configuration:
-    # rl_num_episodes = 100      # TESTING: ~10 min total (all scenarios) - For debugging only
-    # rl_num_episodes = 500      # DEVELOPMENT: ~45 min total - Initial learning visible
-    rl_num_episodes = 2000     # PHASE 1 TARGET: ~3 hours total - Enhanced performance with Phase 1 improvements
-    # rl_num_episodes = 5000     # HIGH-PERFORMANCE: ~8 hours total - Near-optimal performance
-    print(f"🎯 Using DEFAULT episodes count: {rl_num_episodes}")
+# If training is set to start automatically, initialize the start time so
+# metrics and automatic switching compute elapsed times correctly.
+if rl_training_mode:
+  rl_start_time = time.time()
 
-# Command-line training display
-if rl_training_enabled:
-    print(f"🚀 AUTO-START enabled: Training will begin automatically")
-    print(f"🎯 Target episodes: {rl_num_episodes} per scenario-intensity combination")
-    total_episodes = rl_num_episodes * len(rl_training_combinations)
-    print(f"📊 Total episodes across all combinations: {total_episodes}")
-else:
-    print(f"⏸️  AUTO-START disabled: Press 't' to start training manually")
+# Training Configuration Options (uncomment one):
+# rl_num_episodes = 100      # TESTING: ~10 min total (all scenarios) - For debugging only
+rl_num_episodes = 500      # DEVELOPMENT: ~45 min total - Initial learning visible
+# rl_num_episodes = 2000     # PRODUCTION: ~3 hours total - Good performance (recommended)
+# rl_num_episodes = 5000     # HIGH-PERFORMANCE: ~8 hours total - Near-optimal performance
 
-rl_max_steps = 200         # PHASE 1 UPGRADE: Increased from 100 to allow for curriculum learning
+rl_max_steps = 100         # Max steps per episode before timeout (reduced for debugging)
 rl_episode_counter = 0
 rl_step_counter = 0
 rl_state = None
@@ -1564,7 +1186,7 @@ if TRAIN_BOTH_ALGORITHMS:
     print(f"  💡 No manual intervention required - fully automated!")
 print("\nAlgorithm Comparison:")
 print("  📊 Tabular Q-Learning:")
-print("     • ple, interpretable, fast updates")
+print("     • Simple, interpretable, fast updates")
 print("     • Works well for discrete states")
 print("     • Limited scalability to high dimensions")
 print("  🧠 Deep Q-Network (DQN):")
@@ -1584,9 +1206,9 @@ baseorn = p.getQuaternionFromEuler([3.1415, 0, 0.3])
 baseorn = [0, 0, 0, 1]
 #[0, 0, 0.707, 0.707]
 
-#p.resetBasePositionAndOrientation(Id,[0,0,0],baseorn)#[0,0,0,1])
-EndEffectorIndex = 6
-numJoints = p.getNumJoints(Id)
+#p.resetBasePositionAndOrientation(kukaId,[0,0,0],baseorn)#[0,0,0,1])
+kukaEndEffectorIndex = 6
+numJoints = p.getNumJoints(kukaId)
 if (numJoints != 7):
   exit()
 
@@ -1602,7 +1224,7 @@ rp = [0, 0, 0, 0.5 * math.pi, 0, -math.pi * 0.5 * 0.66, 0]
 jd = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
 
 for i in range(numJoints):
-  p.resetJointState(Id, i, rp[i])
+  p.resetJointState(kukaId, i, rp[i])
 
 p.setGravity(0, 0, -9.81)  # Realistic Earth gravity (was -10, causing excessive downward force)
 t = 0.
@@ -1625,15 +1247,15 @@ ang = 0
 ang = 0
 
 
-def accurateCalculateInverseKinematics(Id, endEffectorId, targetPos, threshold, maxIter):
+def accurateCalculateInverseKinematics(kukaId, endEffectorId, targetPos, threshold, maxIter):
     closeEnough = False
     iter = 0
     dist2 = 1e30
     while (not closeEnough and iter < maxIter):
-        jointPoses = p.calculateInverseKinematics(Id, endEffectorId, targetPos)
+        jointPoses = p.calculateInverseKinematics(kukaId, endEffectorId, targetPos)
         for i in range(numJoints):
-            p.resetJointState(Id, i, jointPoses[i])
-        ls = p.getLinkState(Id, endEffectorId)
+            p.resetJointState(kukaId, i, jointPoses[i])
+        ls = p.getLinkState(kukaId, endEffectorId)
         newPos = ls[4]
         diff = [targetPos[0] - newPos[0], targetPos[1] - newPos[1], targetPos[2] - newPos[2]]
         dist2 = (diff[0] * diff[0] + diff[1] * diff[1] + diff[2] * diff[2])
@@ -1806,12 +1428,11 @@ print("CONTROLS:")
 print("  'm' - Toggle autonomous mode on/off")
 print("  'r' - Reset to start position") 
 print("  'i' - Display immediate IMU readings")
-print("  'p' - Apply manual perturbation (test IMU response)")
+print("  'u' - Apply manual perturbation (test IMU response)")
 print("  'v' - Start/stop video recording (30s max)")
 print("  'p' - Capture screenshot (organized in photos/ folder)")
 print("  'c' - Change camera angle (when not recording)")
 print("  'x' - Quick test recording (10 seconds)")
-print("  'D' - Check Husky- decoupling status (manual diagnostic)")
 print("  DISTURBANCE SCENARIOS:")
 print("    '1' - NONE scenario (no disturbances)")
 print("    '2' - RANDOM scenario (continuous noise ±50N)")
@@ -1842,7 +1463,7 @@ print("  � PHOTO CAPTURE - Organized screenshots in photos/ folder")
 print("  �📊 IMU SENSORS - Accelerometer with realistic noise and bias")
 print("  🎮 IMU CONTROL - Gyroscope with drift simulation") 
 print("  🎯 AUTO STABILITY - Disturbance rejection using IMU feedback")
-print("  �️  DISTURBANCE  - 5 systematic disturbance scenarios for testing")
+print("  �️  DISTURBANCE SIM - 5 systematic disturbance scenarios for testing")
 
 if RL_AVAILABLE:
     print("  🤖 RL TRAJECTORY PLANNER:")
@@ -1859,46 +1480,10 @@ if RL_AVAILABLE:
 print("=============================================================")
 
 while 1:
-  # === RESTART SYSTEM CHECK ===
-  # Check if a restart was requested and execute it
-  if restart_requested:
-    restart_success = execute_simulation_restart()
-    if restart_success:
-      print(f"🔄 simulation restarted successfully - continuing with episode continuity")
-      # Re-initialize the simulation (this would normally require a complete re-run)
-      # For now, we'll break and let the user restart manually
-      print(f"⚠️ Manual restart recommended - use same command line arguments to continue")
-      break
-    else:
-      print(f"❌ Restart failed - continuing with current simulation")
-      restart_requested = False
-  
-  # Safety: increment global frame counter and optionally exit when limit reached
-  frame_counter += 1
-  if MAX_FRAMES and frame_counter >= MAX_FRAMES:
-    print(f"⛔ Reached frame limit ({MAX_FRAMES}) - exiting simulation loop")
-    break
-  
-  # Auto-shutdown check
-  if auto_shutdown_requested:
-    print("🏁 Auto-shutdown requested - saving final state and exiting...")
-    
-    # Save final metrics if available
-    try:
-      if 'rl_metrics' in locals() and rl_metrics:
-        final_metrics_file = f'rl_final_metrics_shutdown_{int(time.time())}.json'
-        with open(final_metrics_file, 'w') as f:
-          json.dump(rl_metrics, f, indent=2)
-        print(f"💾 Final metrics saved to {final_metrics_file}")
-    except Exception as e:
-      print(f"⚠️ Could not save final metrics: {e}")
-    
-    print("✅ simulation shutdown complete")
-    break
   # === IMU SENSOR UPDATES ===
   # Read IMU data from both sensors every frame for real-time feedback
   husky_imu_data = husky_imu.read_imu()
-  _imu_data = _imu.read_imu()
+  kuka_imu_data = kuka_imu.read_imu()
   
   # Increment frame counter for periodic logging
   imu_frame_counter += 1
@@ -1909,8 +1494,8 @@ while 1:
     print(f"\n=== IMU DATA UPDATE (Frame {imu_frame_counter}) ===")
     print("HUSKY BASE IMU:")
     husky_imu.print_imu_status(husky_imu_data)
-    print("\n ARM IMU (Link 6):")
-    _imu.print_imu_status(_imu_data)
+    print("\nKUKA ARM IMU (Link 6):")
+    kuka_imu.print_imu_status(kuka_imu_data)
     print("=" * 50)
   
   # Enhanced physics diagnostics (every 5 seconds)
@@ -1926,60 +1511,10 @@ while 1:
       except:
         print("   ❌ Failed to apply emergency constraint reduction")
   
-  # Decoupling detection (every 1 second)
-  decoupling_check_counter += 1
-  if decoupling_check_counter % decoupling_check_interval == 0:
-    is_decoupled, severity, details = print_decoupling_diagnostics()
-    
-    # Auto-restart logic for critical decoupling
-    if auto_restart_enabled and is_decoupled and severity == "CRITICAL":
-      restart_reason = f"Critical decoupling detected: {', '.join(details.get('active_indicators', ['Unknown']))}"
-      restart_success = request_simulation_restart(restart_reason)
-      if restart_success:
-        print(f"🔄 Auto-restart queued for next frame due to critical decoupling")
-        # Continue to next frame where restart will be executed
-      else:
-        print(f"⚠️ Auto-restart not available - continuing with decoupled simulation")
-        print(f"   Manual intervention may be required")
-    
-    # Handle critical decoupling
-    if is_decoupled and severity == "CRITICAL":
-      print("🚨 CRITICAL DECOUPLING DETECTED!")
-      print("   System integrity compromised - consider simulation reset")
-      
-      # Optional: Auto-pause training during critical decoupling
-      if 'rl_training_mode' in locals() and rl_training_mode:
-        print("   ⏸️ Auto-pausing RL training due to decoupling")
-        # Could add: rl_training_mode = False  # Uncomment to auto-pause
-    
-    elif severity == "HIGH":
-      print("⚠️ HIGH risk of decoupling - monitoring closely")
-    
-    elif severity == "WARNING":
-      print("⚠️ Potential decoupling indicators detected")
-  
   keys = p.getKeyboardEvents()
   shift = 0.01
   wheelVelocities = [0, 0, 0, 0]
   speed = 1.0
-  
-  # === AUTO-START RL TRAINING LOGIC ===
-  # Check if auto-start is enabled and training hasn't been activated yet
-  if rl_training_enabled and not rl_training_mode:
-    rl_training_mode = True
-    print(f"\n🚀 AUTO-START ACTIVATED!")
-    print(f"🎓 RL TRAINING MODE ENABLED - Agent will learn trajectory following")
-    print(f"🎯 Scenario: {TRAINING_ARGS.scenario.upper()}")
-    print(f"⚡ Intensity: {TRAINING_ARGS.intensity.upper()}")
-    print(f"📊 Episodes: {rl_num_episodes} per combination")
-    print(f"🔄 Total combinations: {len(rl_training_combinations)}")
-    
-    # Initialize RL agent if not already done
-    if 'rl_agent' not in locals():
-      print("🤖 Initializing RL Agent...")
-      rl_agent = DQNAgent(rl_env.state_size, rl_env.action_size, use_dqn=True)
-      print("✅ DQN Agent ready for training!")
-  
   for k in keys:
     if ord('s') in keys:
       p.saveWorld("state.py")
@@ -1987,11 +1522,6 @@ while 1:
       basepos = basepos = [basepos[0], basepos[1] - shift, basepos[2]]
     if ord('d') in keys:
       basepos = basepos = [basepos[0], basepos[1] + shift, basepos[2]]
-    if ord('D') in keys:  # Capital D for Decoupling check
-      print("\n🔍 MANUAL DECOUPLING CHECK REQUESTED")
-      is_decoupled, severity, details = print_decoupling_diagnostics()
-      if not is_decoupled and severity == "NORMAL":
-        print("✅ System coupling is healthy - no issues detected")
     if ord('m') in keys:
       autonomous_mode = not autonomous_mode
       print(f"Autonomous square path mode: {'ENABLED' if autonomous_mode else 'DISABLED'}")
@@ -2011,15 +1541,15 @@ while 1:
       print("\n=== IMMEDIATE IMU READING ===")
       print("HUSKY BASE IMU:")
       husky_imu.print_imu_status()
-      print(" ARM IMU:")
-      _imu.print_imu_status()
+      print("KUKA ARM IMU:")
+      kuka_imu.print_imu_status()
       print("=" * 30)
-    if ord('p') in keys:
-      # Apply random perturbation to test IMU response
+    if ord('u') in keys:
+      # Apply random perturbation to test IMU response (mapped to 'u' to avoid conflict with screenshot)
       perturbation_force = [
           random.uniform(-50, 50),
-          random.uniform(-50, 50), 
-          0
+          random.uniform(-50, 50),
+          0,
       ]
       perturbation_torque = [0, 0, random.uniform(-10, 10)]
       p.applyExternalForce(husky, -1, perturbation_force, [0, 0, 0], p.WORLD_FRAME)
@@ -2063,6 +1593,7 @@ while 1:
       if rl_training_mode:
         rl_execution_mode = False
         autonomous_mode = False  # Disable regular autonomous mode
+        rl_start_time = time.time()
         print("🎓 RL TRAINING MODE ENABLED - Agent will learn trajectory following")
         print("   Press 't' again to stop training")
       else:
@@ -2080,7 +1611,7 @@ while 1:
     if ord('l') in keys and RL_AVAILABLE:
       # Load RL model
       try:
-        rl_planner.load_model("husky__trajectory_planner")
+        rl_planner.load_model("husky_kuka_trajectory_planner")
         print("📁 RL model loaded successfully")
       except Exception as e:
         print(f"❌ Failed to load RL model: {e}")
@@ -2106,7 +1637,7 @@ while 1:
           rl_current_algorithm = "Q-Learning"
           print("🔄 ALGORITHM SWITCHED: DQN → Q-Learning")
           print("   ✅ Ready for sequential training of Q-Learning agent")
-          print("   • ple lookup table approach")
+          print("   • Simple lookup table approach")
           print("   • Fast updates, interpretable")
           print("   • Best for discrete state spaces")
           print("   🎯 Press 't' to start Q-Learning training")
@@ -2232,25 +1763,18 @@ while 1:
     if rl_step_counter == 0:
       rl_state = rl_env.reset()
       rl_env.current_disturbance = scenario
-      
-      # PHASE 1 UPGRADE: Apply curriculum learning
-      total_episodes_so_far = rl_current_combination_idx * rl_num_episodes + rl_current_episode
-      rl_env.update_curriculum_difficulty(total_episodes_so_far)
-      
       # Synchronize disturbance manager with RL training scenario and intensity
       disturbance_manager.set_scenario(scenario)
       disturbance_manager.set_intensity_mode(intensity)
       
+      # Initialize waypoints for circular trajectory tracking
+      rl_env.generate_waypoints(circle_center, num_waypoints=8)
+      
       intensity_symbol = "⚡" if intensity == "golden" else "📊"
       intensity_factor = disturbance_manager.intensity_modes[intensity]["factor"]
-      
-      # PHASE 1 UPGRADE: Show curriculum status
-      tolerance_cm = rl_env.current_tolerance * 100 if hasattr(rl_env, 'current_tolerance') else 2.0
-      required_steps = rl_env.required_consecutive if hasattr(rl_env, 'required_consecutive') else 10
-      
       print(f"\n[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} ({intensity_factor}x) - Episode {rl_current_episode + 1}/{rl_num_episodes}")
       print(f"🌪️  Scenario: {scenario.upper()} | Intensity: {intensity.upper()} | Combination {rl_current_combination_idx + 1}/{len(rl_training_combinations)}")
-      print(f"🎯 Curriculum: {tolerance_cm:.1f}cm tolerance, {required_steps} consecutive steps required")
+      print(f"🎯 Trajectory center: [{circle_center[0]:.2f}, {circle_center[1]:.2f}], radius: {rl_env.trajectory_radius}m")
     
     # UPDATE GOAL TRAJECTORY - Use same trajectory as main simulation
     trajectory_radius = 0.2  # Same as main simulation
@@ -2280,7 +1804,7 @@ while 1:
     # Track energy (use combined scenario-intensity key)
     combo_key = f"{scenario}_{intensity}"
     ep_energy = rl_metrics[combo_key].get('current_energy', 0)
-    if rl_action >= rl_env.p.getNumJoints(rl_env.kuka_id):
+    if rl_action >= rl_env.p.getNumJoints(rl_env.kuka):
       ep_energy += 1.0
     rl_metrics[combo_key]['current_energy'] = ep_energy
     
@@ -2288,26 +1812,61 @@ while 1:
     if rl_done or rl_step_counter >= rl_max_steps:
       final_error = np.linalg.norm(rl_state[-4:-1] - rl_env.goal_pose[:3])
       
+      # Calculate trajectory completion metrics
+      waypoints_passed = sum(rl_env.waypoints_passed) if rl_env.waypoints else 0
+      total_waypoints = len(rl_env.waypoints) if rl_env.waypoints else 0
+      trajectory_completion = (waypoints_passed / total_waypoints * 100) if total_waypoints > 0 else 0
+      cycles_completed = rl_env.completed_cycles
+      
       if rl_done:
         rl_metrics[combo_key]['success'] += 1
-        print(f"[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} Episode {rl_current_episode + 1} SUCCESS: steps={rl_step_counter}, error={final_error:.3f}, energy={ep_energy}")
+        print(f"[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} Episode {rl_current_episode + 1} SUCCESS:")
+        print(f"   Steps: {rl_step_counter}, Error: {final_error:.3f}m, Energy: {ep_energy}")
+        print(f"   Trajectory: {waypoints_passed}/{total_waypoints} waypoints ({trajectory_completion:.1f}%), {cycles_completed} cycles")
         
         # Capture screenshot for successful episodes (every 10th success)
         success_count = rl_metrics[combo_key]['success']
         if success_count % 10 == 0:  # Only capture every 10th success to avoid too many photos
           photo_manager.capture_training_screenshot(scenario, rl_current_episode + 1, rl_current_algorithm)
       else:
-        print(f"[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} Episode {rl_current_episode + 1} TIMEOUT: steps={rl_step_counter}, error={final_error:.3f}, energy={ep_energy}")
+        print(f"[RL][{scenario.upper()}] {intensity_symbol}{intensity.upper()} Episode {rl_current_episode + 1} TIMEOUT:")
+        print(f"   Steps: {rl_step_counter}, Error: {final_error:.3f}m, Energy: {ep_energy}")
+        print(f"   Trajectory: {waypoints_passed}/{total_waypoints} waypoints ({trajectory_completion:.1f}%), {cycles_completed} cycles")
       
       rl_metrics[combo_key]['errors'].append(final_error)
       rl_metrics[combo_key]['steps'].append(rl_step_counter)
       rl_metrics[combo_key]['energy'].append(ep_energy)
       rl_metrics[combo_key]['episodes'] += 1
       
+      # Track trajectory completion metrics
+      if 'trajectory_completion' not in rl_metrics[combo_key]:
+        rl_metrics[combo_key]['trajectory_completion'] = []
+        rl_metrics[combo_key]['cycles_completed'] = []
+      rl_metrics[combo_key]['trajectory_completion'].append(trajectory_completion)
+      rl_metrics[combo_key]['cycles_completed'].append(cycles_completed)
+      
       # Reset for next episode
       rl_step_counter = 0
       rl_current_episode += 1
       rl_metrics[combo_key]['current_energy'] = 0
+      
+      # Print trajectory performance summary every 50 episodes
+      if rl_current_episode % 50 == 0 and rl_current_episode > 0:
+        if 'trajectory_completion' in rl_metrics[combo_key] and rl_metrics[combo_key]['trajectory_completion']:
+          avg_trajectory_completion = np.mean(rl_metrics[combo_key]['trajectory_completion'][-50:])
+          avg_cycles = np.mean(rl_metrics[combo_key]['cycles_completed'][-50:])
+          best_trajectory = max(rl_metrics[combo_key]['trajectory_completion'][-50:])
+          best_cycles = max(rl_metrics[combo_key]['cycles_completed'][-50:])
+          
+          print(f"\n📊 TRAJECTORY PERFORMANCE SUMMARY (Episodes {rl_current_episode-49}-{rl_current_episode}):")
+          print(f"   Average trajectory completion: {avg_trajectory_completion:.1f}%")
+          print(f"   Average cycles per episode: {avg_cycles:.2f}")
+          print(f"   Best trajectory completion: {best_trajectory:.1f}%")
+          print(f"   Best cycles in episode: {best_cycles}")
+          
+          if len(rl_env.cycle_accuracy_scores) > 0:
+            avg_cycle_accuracy = np.mean(rl_env.cycle_accuracy_scores)
+            print(f"   Average cycle accuracy: {avg_cycle_accuracy:.1%}")
       
       # Save checkpoint every 100 episodes
       if rl_current_episode % 100 == 0 and rl_current_episode > 0:
@@ -2435,20 +1994,10 @@ while 1:
               rl_training_mode = False
               rl_sequential_training_status['both_completed'] = True
               print("🎓 RL Training Mode AUTO-DISABLED (both algorithms complete)\n")
-              
-              # Auto-shutdown if requested
-              if TRAINING_ARGS.auto_shutdown:
-                print("🔄 AUTO-SHUTDOWN: All training complete, exiting simulation...")
-                auto_shutdown_requested = True
           else:
             # Single algorithm mode - disable training
             rl_training_mode = False
             print("🎓 RL Training Mode AUTO-DISABLED (all combinations complete)\n")
-            
-            # Auto-shutdown if requested
-            if TRAINING_ARGS.auto_shutdown:
-              print("🔄 AUTO-SHUTDOWN: Training complete, exiting simulation...")
-              auto_shutdown_requested = True
   
   # === RL TRAJECTORY PLANNER CONTROL (if available) ===
   if RL_AVAILABLE and rl_planner is not None:
@@ -2565,7 +2114,7 @@ while 1:
         # Normal operation
         stability_factor = 1.0
     
-    # ple proportional controller for navigation with IMU feedback
+    # Simple proportional controller for navigation with IMU feedback
     angle_threshold = 0.2  # ~11 degrees
 
 # === ALTERNATIVE: SQUARE PATH NAVIGATION (COMMENTED OUT) ===
@@ -2652,7 +2201,7 @@ while 1:
         print(f"HUSKY IMU - Accel: {husky_accel_mag:.2f} m/s², Gyro: {husky_gyro_mag:.3f} rad/s")
         print(f"VIDEO STATUS - {video_recorder.get_status()}")
   
-  #p.resetBasePositionAndOrientation(Id,basepos,baseorn)#[0,0,0,1])
+  #p.resetBasePositionAndOrientation(kukaId,basepos,baseorn)#[0,0,0,1])
   if (useRealTimeSimulation):
     t = time.time()  #(dt, micro) = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f').split('.')
     #t = (dt.second/60.)*2.*math.pi
@@ -2700,11 +2249,11 @@ while 1:
 
     if (useNullSpace == 1):
       if (useOrientation == 1):
-        jointPoses = p.calculateInverseKinematics(Id, EndEffectorIndex, pos, orn, ll, ul,
+        jointPoses = p.calculateInverseKinematics(kukaId, kukaEndEffectorIndex, pos, orn, ll, ul,
                                                   jr, rp)
       else:
-        jointPoses = p.calculateInverseKinematics(Id,
-                                                  EndEffectorIndex,
+        jointPoses = p.calculateInverseKinematics(kukaId,
+                                                  kukaEndEffectorIndex,
                                                   pos,
                                                   lowerLimits=ll,
                                                   upperLimits=ul,
@@ -2712,21 +2261,21 @@ while 1:
                                                   restPoses=rp)
     else:
       if (useOrientation == 1):
-        jointPoses = p.calculateInverseKinematics(Id,
-                                                  EndEffectorIndex,
+        jointPoses = p.calculateInverseKinematics(kukaId,
+                                                  kukaEndEffectorIndex,
                                                   pos,
                                                   orn,
                                                   jointDamping=jd)
       else:
         threshold = 0.001
         maxIter = 100
-        jointPoses = accurateCalculateInverseKinematics(Id, EndEffectorIndex, pos,
+        jointPoses = accurateCalculateInverseKinematics(kukaId, kukaEndEffectorIndex, pos,
                                                         threshold, maxIter)
 
     if (useSimulation):
       for i in range(numJoints):
-        # Enhanced KUKA IIWA joint control with realistic servo parameters
-        p.setJointMotorControl2(bodyIndex=Id,
+        # Enhanced KUKA joint control with realistic servo parameters
+        p.setJointMotorControl2(bodyIndex=kukaId,
                                 jointIndex=i,
                                 controlMode=p.POSITION_CONTROL,
                                 targetPosition=jointPoses[i],
@@ -2738,9 +2287,9 @@ while 1:
     else:
       #reset the joint state (ignoring all dynamics, not recommended to use during simulation)
       for i in range(numJoints):
-        p.resetJointState(Id, i, jointPoses[i])
+        p.resetJointState(kukaId, i, jointPoses[i])
 
-  ls = p.getLinkState(Id, EndEffectorIndex)
+  ls = p.getLinkState(kukaId, kukaEndEffectorIndex)
   if (hasPrevPose):
     p.addUserDebugLine(prevPose, pos, [0, 0, 0.3], 1, trailDuration)
     p.addUserDebugLine(prevPose1, ls[4], [1, 0, 0], 1, trailDuration)

@@ -1,0 +1,142 @@
+{
+  "none_normal": {
+    "success": 1,
+    "errors": [
+      0.8090369975427739
+    ],
+    "steps": [
+      200
+    ],
+    "energy": [
+      126.0
+    ],
+    "episodes": 1,
+    "current_energy": 0
+  },
+  "none_golden": {
+    "success": 1,
+    "errors": [
+      0.8120134701750767
+    ],
+    "steps": [
+      200
+    ],
+    "energy": [
+      116.0
+    ],
+    "episodes": 1,
+    "current_energy": 0
+  },
+  "random_normal": {
+    "success": 1,
+    "errors": [
+      0.8145751568219343
+    ],
+    "steps": [
+      200
+    ],
+    "energy": [
+      124.0
+    ],
+    "episodes": 1,
+    "current_energy": 0
+  },
+  "random_golden": {
+    "success": 1,
+    "errors": [
+      0.8169650587595357
+    ],
+    "steps": [
+      200
+    ],
+    "energy": [
+      129.0
+    ],
+    "episodes": 1,
+    "current_energy": 0
+  },
+  "periodic_normal": {
+    "success": 1,
+    "errors": [
+      0.8188426459425662
+    ],
+    "steps": [
+      200
+    ],
+    "energy": [
+      125.0
+    ],
+    "episodes": 1,
+    "current_energy": 0
+  },
+  "periodic_golden": {
+    "success": 1,
+    "errors": [
+      0.6386887078660188
+    ],
+    "steps": [
+      200
+    ],
+    "energy": [
+      122.0
+    ],
+    "episodes": 1,
+    "current_energy": 0
+  },
+  "continuous_normal": {
+    "success": 1,
+    "errors": [
+      0.6627879320780726
+    ],
+    "steps": [
+      200
+    ],
+    "energy": [
+      117.0
+    ],
+    "episodes": 1,
+    "current_energy": 0
+  },
+  "continuous_golden": {
+    "success": 1,
+    "errors": [
+      0.7840005474464695
+    ],
+    "steps": [
+      200
+    ],
+    "energy": [
+      133.0
+    ],
+    "episodes": 1,
+    "current_energy": 0
+  },
+  "impulse_normal": {
+    "success": 1,
+    "errors": [
+      0.772666375301436
+    ],
+    "steps": [
+      200
+    ],
+    "energy": [
+      110.0
+    ],
+    "episodes": 1,
+    "current_energy": 0
+  },
+  "impulse_golden": {
+    "success": 1,
+    "errors": [
+      0.632491700719254
+    ],
+    "steps": [
+      200
+    ],
+    "energy": [
+      134.0
+    ],
+    "episodes": 1,
+    "current_energy": 0
+  }
+}
