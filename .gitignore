@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyTorch model files
+*.pth
+*.pt
+
+# Pickle files (Q-tables and other serialized data)
+*.pkl
+*.pickle
+
+# Backup files
+*~
+*.bak
+*\(1\).py
+*\(2\).py
+*_backup/
+*_old/
+
+# Training checkpoints (keep only final models and milestones in git)
+rl_checkpoint_*.pth
+rl_checkpoint_*.pkl
+
+# Archive directory
+archive/
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# Large data files
+*.mp4
+*.avi
+*.mov
+*.h5
+*.hdf5
+
+# Temporary files
+*.log
+*.tmp
+temp/
+tmp/
