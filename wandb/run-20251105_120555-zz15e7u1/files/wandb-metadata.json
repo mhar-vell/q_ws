@@ -1,0 +1,40 @@
+{
+  "os":  "Linux-6.14.0-34-generic-x86_64-with-glibc2.39",
+  "python":  "CPython 3.12.2",
+  "startedAt":  "2025-11-05T15:05:55.910272Z",
+  "program":  "/home/marcoreis/robust_mm_control_ws/training_data/phase_06_monitoring_evaluation/logging_infrastructure/wandb_integration.py",
+  "codePath":  "training_data/phase_06_monitoring_evaluation/logging_infrastructure/wandb_integration.py",
+  "codePathLocal":  "training_data/phase_06_monitoring_evaluation/logging_infrastructure/wandb_integration.py",
+  "git":  {
+    "remote":  "git@github.com:mhar-vell/robust_mm_control_ws.git",
+    "commit":  "acca622aa67855de85c85ea7141bfbfb07647b93"
+  },
+  "email":  "marcoreis@me.com",
+  "root":  "/home/marcoreis/robust_mm_control_ws",
+  "host":  "koodo",
+  "executable":  "/home/marcoreis/anaconda3/bin/python",
+  "cpu_count":  14,
+  "cpu_count_logical":  20,
+  "gpu":  "NVIDIA GeForce RTX 4050 Laptop GPU",
+  "gpu_count":  1,
+  "disk":  {
+    "/":  {
+      "total":  "1005867986944",
+      "used":  "504319877120"
+    }
+  },
+  "memory":  {
+    "total":  "33322823680"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA GeForce RTX 4050 Laptop GPU",
+      "memoryTotal":  "6439305216",
+      "cudaCores":  2560,
+      "architecture":  "Ada",
+      "uuid":  "GPU-d505c292-36cc-86ff-d047-146754a7563c"
+    }
+  ],
+  "cudaVersion":  "12.8",
+  "writerId":  "78mt9ikqkdnf5awq1s4c5lfgisys42jy"
+}

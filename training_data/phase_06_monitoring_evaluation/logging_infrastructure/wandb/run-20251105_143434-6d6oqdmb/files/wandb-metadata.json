@@ -1,0 +1,17 @@
+{
+  "os":  "Linux-6.14.0-34-generic-x86_64-with-glibc2.39",
+  "python":  "CPython 3.13.8",
+  "startedAt":  "2025-11-05T17:34:34.749127Z",
+  "program":  "/home/marcoreis/robust_mm_control_ws/training_data/phase_06_monitoring_evaluation/logging_infrastructure/wandb_integration.py",
+  "codePath":  "training_data/phase_06_monitoring_evaluation/logging_infrastructure/wandb_integration.py",
+  "codePathLocal":  "wandb_integration.py",
+  "git":  {
+    "remote":  "git@github.com:mhar-vell/robust_mm_control_ws.git",
+    "commit":  "acca622aa67855de85c85ea7141bfbfb07647b93"
+  },
+  "email":  "marcoreis@me.com",
+  "root":  "/home/marcoreis/robust_mm_control_ws/training_data/phase_06_monitoring_evaluation/logging_infrastructure",
+  "host":  "koodo",
+  "executable":  "/home/marcoreis/anaconda3/envs/pybullet_env/bin/python",
+  "writerId":  "2s5rylcoea0rgl0m7pajmc9i3uyyn1ds"
+}
