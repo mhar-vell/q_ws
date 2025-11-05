@@ -1,217 +1,1719 @@
-# Phase 3: Future Experiments - Planning Document
+# Future Experiments - Planning Document
 
-## 📋 **Phase Overview**
+## 📋 **Overview**
 
-**Purpose**: Advanced experiments building on Phase 1 & 2 insights  
+**Purpose**: Advanced experiments building on Phase 01-03 insights  
 **Status**: Planning Stage  
-**Timeline**: Future work (post-thesis)
+**Timeline**: Phase 04-08 roadmap  
+**Last Updated**: November 5, 2025
 
-## 🚀 **Planned Research Directions**
+---
+
+## 🎯 **Research Vision**
+
+Building on the dual-intensity training methodology (Phase 02) and algorithm comparison (Phase 03), this document outlines a systematic research roadmap focusing on:
+
+1. **State Optimization** (Phase 04): Enhanced representations for better learning
+2. **Training Improvements** (Phase 05): Curriculum learning and optimization
+3. **Monitoring & Evaluation** (Phase 06): Comprehensive analysis framework
+4. **Advanced Topics** (Phase 07-08): Transfer learning and explainability
+
+---
+
+## 🚀 **Phase 04: State Optimization**
+
+**Timeline**: 4-6 weeks  
+**Priority**: ⭐⭐⭐ HIGH (Foundation for all future work)  
+**Goal**: Enhanced state representation and trajectory integration for improved learning
+
+### **Current Limitations (Phase 03)**
+
+The baseline DQN uses a **35-dimensional instantaneous state**:
+- ✅ Covers all relevant system variables (joints, EE, base, IMU, goal)
+- ❌ **No temporal information**: Agent has no memory of past states
+- ❌ **No trajectory context**: Agent doesn't know where it's been or going
+- ❌ **Limited disturbance awareness**: IMU data is noisy, no pattern detection
+
+**Result**: Mean error = 0.753m, suggesting room for improvement
+
+---
+
+### **4.1 Temporal History Integration**
+
+Add state history to enable temporal reasoning:
+
+```python
+# Current: Instantaneous state (35D)
+state_t = [joints, velocities, ee_pose, base_pose, imu, goal, metrics]
+
+# Proposed: State with history (3-5 step window)
+state_with_history = [
+    state_t,              # Current state (35D)
+    state_t-1,            # 1 timestep ago (35D)
+    state_t-2,            # 2 timesteps ago (35D)
+    # Optional: state_t-3, state_t-4
+]
+# Total: 105D (3-step) or 175D (5-step)
+
+# Alternative: Velocity/acceleration features (computed)
+temporal_features = [
+    state_t,              # Current (35D)
+    (state_t - state_t-1) / dt,  # Velocity estimate (35D)
+    (state_t - 2*state_t-1 + state_t-2) / dt²  # Acceleration (35D)
+]
+# Total: 105D (more compact)
+```
+
+**Expected Benefits**:
+- Detect disturbance patterns (periodic vs impulse)
+- Learn momentum and inertia effects
+- Better predict trajectory deviations
+- **Expected improvement**: ↓ 10-15% error
+
+**Experiments**:
+```
+phase_04_state_optimization/
+├── temporal_history/
+│   ├── 01_baseline_35d/              # Current (reference)
+│   ├── 02_history_3step/             # 105D: [t, t-1, t-2]
+│   ├── 03_history_5step/             # 175D: [t, t-1, t-2, t-3, t-4]
+│   ├── 04_velocity_features/         # 70D: [t, velocity]
+│   └── 05_velocity_acceleration/     # 105D: [t, v, a]
+```
+
+---
+
+### **4.2 Trajectory Integration** ⭐ HIGHEST IMPACT
+
+Add future waypoint information to enable planning:
+
+```python
+# Current: Only current target waypoint
+current_target = trajectory[current_index]  # (6D: x,y,z,rx,ry,rz)
+
+# Proposed: Multi-waypoint lookahead
+trajectory_features = [
+    current_state,                    # 35D
+    current_target,                   # 6D
+    next_waypoint_1,                  # 6D
+    next_waypoint_2,                  # 6D
+    next_waypoint_3,                  # 6D (optional)
+    
+    # Trajectory progress metrics
+    waypoints_completed / total,      # 1D: Progress ratio
+    distance_to_trajectory_end,       # 1D
+    average_error_last_3_waypoints,   # 1D: Error trend
+    trajectory_curvature_ahead,       # 1D: Sharp turns?
+    
+    # Predictive features
+    estimated_time_to_next_waypoint,  # 1D
+    required_velocity_profile,        # 1D: Speed needed
+]
+# Total: 35 + 6*3 + 6 = 59D (compact and effective)
+```
+
+**Expected Benefits**:
+- Agent can "plan ahead" instead of just reacting
+- Learn smooth transitions between waypoints
+- Anticipate difficult trajectory sections
+- Reduce oscillations around targets
+- **Expected improvement**: ↓ 15-25% error
+
+**Experiments**:
+```
+phase_04_state_optimization/
+├── trajectory_aware/
+│   ├── 01_baseline_current_only/     # Current waypoint only (35D)
+│   ├── 02_next_1_waypoint/           # +1 lookahead (41D)
+│   ├── 03_next_3_waypoints/          # +3 lookahead (53D)
+│   ├── 04_next_5_waypoints/          # +5 lookahead (65D)
+│   ├── 05_with_progress_metrics/     # +progress features (59D)
+│   └── 06_with_curvature/            # +geometric features (62D)
+```
+
+---
+
+### **4.3 Enhanced Feature Engineering**
+
+Add computed features for better state representation:
+
+**Disturbance Detection Features**:
+```python
+disturbance_features = [
+    imu_deviation_from_baseline,           # Anomaly detection (1D)
+    acceleration_variance_window5,         # Variance over 5 steps (1D)
+    recent_force_impulse_magnitude,        # Impulse magnitude (1D)
+    disturbance_frequency_estimate,        # FFT-based (1D)
+]
+# +4D to state
+```
+
+**Control Quality Features**:
+```python
+control_features = [
+    joint_acceleration_magnitude,          # Smoothness metric (1D)
+    energy_consumption_rate,               # Power usage (1D)
+    manipulability_index,                  # Kinematic health (1D)
+    distance_from_joint_limits,            # Safety margin (1D)
+]
+# +4D to state
+```
+
+**Experiments**:
+```
+phase_04_state_optimization/
+├── enhanced_features/
+│   ├── 01_baseline/
+│   ├── 02_disturbance_detection/      # +4D
+│   ├── 03_control_quality/            # +4D
+│   ├── 04_combined/                   # +8D
+│   └── 05_feature_selection/          # Best subset only
+```
+
+---
+
+### **4.4 Network Architecture Variants**
+
+Test different architectures with enhanced state:
+
+| Architecture | Structure | Parameters | Best For |
+|--------------|-----------|------------|----------|
+| **Baseline** | 35→128→128→10 | 22K | Current |
+| **Wider** | 59→256→256→128→10 | 85K | Rich features |
+| **Deeper** | 59→128→128→128→64→10 | 35K | Complex patterns |
+| **Residual** | 59→128(+skip)→128(+skip)→10 | 40K | Very deep networks |
+| **Dueling** | 59→128→[V(1), A(10)]→Q | 25K | Better value estimation |
+
+**Experiments**:
+```
+phase_04_state_optimization/
+├── architectures/
+│   ├── 01_baseline_128_128/
+│   ├── 02_wider_256_256_128/
+│   ├── 03_deeper_4layers/
+│   ├── 04_residual_connections/
+│   └── 05_dueling_dqn/
+```
+
+---
+
+### **4.5 Recurrent Architectures** ⭐ MAJOR VARIANT
+
+Replace feedforward with recurrent networks for temporal modeling:
+
+**LSTM-DQN**:
+```python
+class LSTM_DQN(nn.Module):
+    def __init__(self, state_dim, action_dim, hidden_size=128):
+        super().__init__()
+        self.lstm = nn.LSTM(state_dim, hidden_size, num_layers=2, batch_first=True)
+        self.fc1 = nn.Linear(hidden_size, 128)
+        self.fc2 = nn.Linear(128, action_dim)
+        
+    def forward(self, state_sequence, hidden=None):
+        # state_sequence: (batch, seq_len, state_dim)
+        lstm_out, hidden = self.lstm(state_sequence, hidden)
+        x = F.relu(self.fc1(lstm_out[:, -1, :]))  # Use last output
+        q_values = self.fc2(x)
+        return q_values, hidden
+```
+
+**GRU-DQN** (Lighter):
+```python
+class GRU_DQN(nn.Module):
+    def __init__(self, state_dim, action_dim, hidden_size=128):
+        super().__init__()
+        self.gru = nn.GRU(state_dim, hidden_size, num_layers=2, batch_first=True)
+        self.fc1 = nn.Linear(hidden_size, 128)
+        self.fc2 = nn.Linear(128, action_dim)
+```
+
+**Transformer-DQN** (Attention-based):
+```python
+class TransformerDQN(nn.Module):
+    def __init__(self, state_dim, action_dim, n_heads=4):
+        super().__init__()
+        self.embedding = nn.Linear(state_dim, 128)
+        self.attention = nn.MultiheadAttention(128, n_heads)
+        self.fc1 = nn.Linear(128, 128)
+        self.fc2 = nn.Linear(128, action_dim)
+```
+
+**Expected Benefits**:
+- Built-in temporal reasoning
+- No need to manually stack states
+- Learn long-term dependencies
+- **Expected improvement**: ↓ 20-30% error
+
+**Trade-offs**:
+- ✅ Better temporal modeling
+- ✅ No manual history stacking
+- ❌ Harder to train (BPTT)
+- ❌ Requires sequence-based replay buffer
+- ❌ +50% training time
+
+**Experiments**:
+```
+phase_04_state_optimization/
+├── recurrent/
+│   ├── 01_lstm_1layer/
+│   ├── 02_lstm_2layers/
+│   ├── 03_gru_2layers/
+│   ├── 04_transformer_4heads/
+│   └── 05_comparison_vs_feedforward/
+```
+
+---
+
+### **4.6 Hierarchical State Representation**
+
+Structure state into semantic layers:
+
+```python
+class HierarchicalDQN(nn.Module):
+    def __init__(self):
+        # Low-level: Joint-space features
+        self.low_level_net = nn.Linear(14, 64)  # joints + velocities
+        
+        # Mid-level: Task-space features
+        self.mid_level_net = nn.Linear(12, 64)  # EE + base pose
+        
+        # High-level: Goal-oriented features  
+        self.high_level_net = nn.Linear(9, 32)  # goal, distance, progress
+        
+        # Combine all levels
+        self.combiner = nn.Linear(160, 128)
+        self.output = nn.Linear(128, action_dim)
+```
+
+**Experiments**:
+```
+phase_04_state_optimization/
+├── hierarchical/
+│   ├── 01_flat_baseline/
+│   ├── 02_two_level/               # Low + High
+│   ├── 03_three_level/             # Low + Mid + High
+│   └── 04_learned_hierarchy/       # Auto-encoder
+```
+
+---
+
+### **Phase 04 Deliverables**
+
+1. **Ablation Study Report**: Which state representation gives best performance?
+2. **Best State Configuration**: Optimal feature set + dimensionality
+3. **Architecture Recommendation**: Which network architecture for chosen state?
+4. **Performance Comparison**: Error reduction vs Phase 03 baseline
+5. **Computational Analysis**: Training time / memory trade-offs
+
+**Success Criteria**:
+- [ ] Mean error < 0.65m (↓ 13% from Phase 03)
+- [ ] At least 3 state variants tested
+- [ ] Statistical significance (p < 0.05)
+- [ ] Documented in phase_04 folder
+
+---
+
+## 🎓 **Phase 05: Training Improvements**
+
+**Timeline**: 6-8 weeks  
+**Priority**: ⭐⭐⭐ HIGH (Maximize performance of Phase 04 state)  
+**Goal**: Optimize training methodology through curriculum learning and hyperparameter tuning
+
+### **5.1 Curriculum Learning** ⭐ HIGHEST IMPACT
+
+Gradually increase training difficulty for better convergence:
+
+#### **Intensity Curriculum**
+
+**Linear Progression**:
+```python
+def linear_intensity_curriculum(episode, max_episodes):
+    """Gradually increase from normal to golden ratio"""
+    progress = episode / max_episodes
+    intensity = intensity_normal + progress * (intensity_golden - intensity_normal)
+    return intensity
+
+# Example: Episodes 0-10000
+# Ep 0: normal (0.05)
+# Ep 5000: medium (0.089)
+# Ep 10000: golden (0.128)
+```
+
+**Exponential Ramp-up**:
+```python
+def exponential_intensity_curriculum(episode, max_episodes, k=3):
+    """Slow start, rapid increase at end"""
+    progress = episode / max_episodes
+    intensity = intensity_normal * exp(k * progress)
+    return intensity
+
+# Stays near 'normal' for first 60%, then ramps up
+```
+
+**Step-wise (Plateau)**:
+```python
+def stepwise_intensity_curriculum(episode):
+    """Discrete difficulty levels"""
+    if episode < 2000:
+        return intensity_normal
+    elif episode < 5000:
+        return 0.5 * (intensity_normal + intensity_golden)
+    elif episode < 8000:
+        return 0.75 * intensity_normal + 0.25 * intensity_golden
+    else:
+        return intensity_golden
+```
+
+**Adaptive (Performance-based)** ⭐ NOVEL:
+```python
+def adaptive_intensity_curriculum(recent_success_rate, current_intensity):
+    """Adjust based on agent performance"""
+    if recent_success_rate > 0.85:
+        # Agent mastered current level → increase difficulty
+        return min(current_intensity * 1.1, intensity_golden)
+    elif recent_success_rate < 0.60:
+        # Agent struggling → reduce difficulty
+        return max(current_intensity * 0.9, intensity_normal)
+    else:
+        # Maintain current level
+        return current_intensity
+
+# Self-paced learning - agent controls its own curriculum
+```
+
+**Experiments**:
+```
+phase_05_training_improvements/
+├── intensity_curriculum/
+│   ├── 01_baseline_fixed_golden/     # Phase 03 approach
+│   ├── 02_linear_progression/
+│   ├── 03_exponential_rampup/
+│   ├── 04_stepwise_plateaus/
+│   ├── 05_adaptive_performance/      # Novel contribution
+│   └── 06_comparison_analysis/
+```
+
+---
+
+#### **Scenario Curriculum**
+
+Order scenarios by difficulty for skill building:
+
+**Easy → Hard Ordering**:
+```python
+# Phase 1: Predictable disturbances (5K episodes each)
+easy_scenarios = ['none', 'continuous', 'periodic']
+
+# Phase 2: Stochastic disturbances (5K episodes each)
+hard_scenarios = ['random', 'impulse']
+
+# Total: 25K episodes with skill building
+```
+
+**Grouped by Type**:
+```python
+# Learn general control first
+baseline = ['none']  # 5K episodes
+
+# Learn periodic patterns
+periodic_group = ['continuous', 'periodic']  # 10K episodes
+
+# Learn stochastic rejection
+stochastic_group = ['random', 'impulse']  # 10K episodes
+```
+
+**Reverse Curriculum** (Counter-intuitive test):
+```python
+# Start hard, end easy
+reverse_order = ['impulse', 'random', 'periodic', 'continuous', 'none']
+
+# Hypothesis: Hard scenarios force robust learning early
+# May prevent overfitting to easy cases
+```
+
+**Experiments**:
+```
+phase_05_training_improvements/
+├── scenario_curriculum/
+│   ├── 01_baseline_mixed/            # Phase 03: All scenarios mixed
+│   ├── 02_easy_to_hard/
+│   ├── 03_grouped_by_type/
+│   ├── 04_reverse_curriculum/
+│   └── 05_comparison/
+```
+
+---
+
+#### **Multi-Dimensional Curriculum**
+
+Vary multiple aspects simultaneously:
+
+```python
+curriculum_schedule = {
+    'intensity': linear_schedule(0.05 → 0.128),
+    'trajectory_complexity': simple_circle → figure8 → helix,
+    'noise_level': low_noise(σ=0.01) → high_noise(σ=0.05),
+    'episode_length': short(100 steps) → long(200 steps),
+}
+
+# All dimensions progress together or independently
+```
+
+---
+
+### **5.2 Hyperparameter Optimization**
+
+Systematic search for optimal training configuration:
+
+#### **Grid Search** (Exhaustive):
+
+```python
+hyperparam_grid = {
+    'learning_rate': [1e-4, 5e-4, 1e-3, 5e-3],
+    'gamma': [0.95, 0.97, 0.99],
+    'batch_size': [32, 64, 128, 256],
+    'buffer_size': [10000, 50000, 100000],
+    'target_update_freq': [100, 500, 1000],
+    'epsilon_decay': [0.995, 0.999, 0.9995],
+    'hidden_units': [[128,128], [256,256], [512,256]],
+    'dropout': [0.0, 0.1, 0.2, 0.3],
+}
+
+# Total combinations: 4×3×4×3×3×3×3×4 = 15,552
+# Use distributed training (Ray Tune) to parallelize
+```
+
+#### **Bayesian Optimization** (Smart search):
+
+```python
+import optuna
+
+def objective(trial):
+    # Suggest hyperparameters
+    lr = trial.suggest_loguniform('lr', 1e-5, 1e-2)
+    gamma = trial.suggest_uniform('gamma', 0.9, 0.99)
+    batch_size = trial.suggest_categorical('batch_size', [32, 64, 128, 256])
+    
+    # Train agent
+    agent = train_dqn(lr=lr, gamma=gamma, batch_size=batch_size)
+    
+    # Return performance metric
+    return agent.final_test_error
+
+# Optuna uses TPE (Tree-structured Parzen Estimator)
+# Finds good configs in ~100-200 trials instead of 15K
+study = optuna.create_study(direction='minimize')
+study.optimize(objective, n_trials=200)
+```
+
+#### **Population-Based Training** (Evolutionary):
+
+```python
+# Train N agents in parallel (e.g., N=10)
+# Periodically:
+#   1. Evaluate all agents
+#   2. Copy weights from best performers to worst
+#   3. Mutate hyperparameters of copied agents
+# 
+# Discovers both good weights AND good hyperparameter schedules
+# E.g., learning rate decay happens automatically
+
+# Use Ray Tune PBT scheduler
+```
+
+**Experiments**:
+```
+phase_05_training_improvements/
+├── hyperparameter_tuning/
+│   ├── 01_baseline_hyperparams/      # Phase 03 config
+│   ├── 02_grid_search/               # Exhaustive
+│   ├── 03_bayesian_optimization/     # Smart search
+│   ├── 04_pbt/                       # Evolutionary
+│   └── 05_best_config/               # Final recommendation
+```
+
+---
+
+### **5.3 Extended Training Protocols**
+
+Test longer training for asymptotic performance:
+
+| Protocol | Episodes | Purpose | Expected Outcome |
+|----------|----------|---------|------------------|
+| **Standard** | 10,000 | Phase 03 baseline | 0.753m error |
+| **Extended** | 25,000 | Check late improvements | 0.70-0.72m? |
+| **Very Long** | 50,000 | Find asymptote | Performance plateau |
+| **Multi-seed** | 10K × 5 | Reliability check | Confidence intervals |
+| **Continual** | 100K+ | Lifelong learning | Catastrophic forgetting? |
+
+**Learning Rate Schedules**:
+
+```python
+# Constant (current)
+lr = 0.001
+
+# Step decay
+lr = 0.001 * 0.5^(epoch // 5000)
+
+# Cosine annealing
+lr = lr_min + 0.5 * (lr_max - lr_min) * (1 + cos(π * epoch / max_epochs))
+
+# Warm-up + decay
+if epoch < warmup_epochs:
+    lr = lr_max * (epoch / warmup_epochs)
+else:
+    lr = lr_max * decay_rate^(epoch - warmup_epochs)
+
+# Adaptive (ReduceLROnPlateau)
+if performance_plateau_detected:
+    lr = lr * 0.5
+```
+
+**Experiments**:
+```
+phase_05_training_improvements/
+├── extended_training/
+│   ├── 01_standard_10k/
+│   ├── 02_extended_25k/
+│   ├── 03_very_long_50k/
+│   ├── 04_multi_seed_5x10k/
+│   └── 05_learning_curves/
+```
+
+---
+
+### **5.4 Advanced Training Techniques**
+
+#### **Prioritized Experience Replay (PER)**:
+
+```python
+# Instead of uniform sampling from replay buffer:
+priority = |TD_error| + ε
+sample_probability ∝ priority^α
+
+# High TD-error transitions sampled more often
+# Agent learns faster from "surprising" experiences
+```
+
+#### **Hindsight Experience Replay (HER)**:
+
+```python
+# Re-label failed trajectories with achieved goals
+# If agent reached (x', y', z') instead of goal (x, y, z):
+#   Store transition with goal = (x', y', z') and reward = 0
+# 
+# Helps sparse reward problems
+# Every trajectory provides learning signal
+```
+
+#### **n-Step Returns**:
+
+```python
+# Current: 1-step TD target
+target = r_t + γ * max_a Q(s_t+1, a)
+
+# n-step: Use multiple future rewards
+target = r_t + γ*r_t+1 + γ²*r_t+2 + ... + γⁿ*max_a Q(s_t+n, a)
+
+# Better credit assignment over longer horizons
+```
+
+**Experiments**:
+```
+phase_05_training_improvements/
+├── advanced_techniques/
+│   ├── 01_baseline_uniform_replay/
+│   ├── 02_prioritized_replay/
+│   ├── 03_hindsight_replay/
+│   ├── 04_n_step_returns/
+│   └── 05_combined/
+```
+
+---
+
+### **5.5 Multi-Task Learning**
+
+Train on multiple objectives simultaneously:
+
+```python
+# Multiple reward components
+reward_components = {
+    'trajectory_tracking': -position_error * 10,
+    'smoothness': -joint_acceleration * 0.1,
+    'energy_efficiency': -torque_magnitude * 0.05,
+    'safety': -collision_risk * 100,
+    'speed': -time_to_completion * 0.5,
+}
+
+# Weighted sum
+total_reward = sum(weight[k] * reward_components[k] for k in reward_components)
+
+# Experiment with different weight combinations:
+# - Balanced: All weights equal
+# - Accuracy-focused: High trajectory_tracking weight
+# - Efficiency-focused: High energy + smoothness weights
+```
+
+**Multi-Head Q-Network**:
+```python
+class MultiTaskDQN(nn.Module):
+    def __init__(self, state_dim, action_dim, num_tasks):
+        self.shared = nn.Sequential(
+            nn.Linear(state_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU()
+        )
+        # Separate heads for each task
+        self.heads = nn.ModuleList([
+            nn.Linear(128, action_dim) for _ in range(num_tasks)
+        ])
+    
+    def forward(self, x, task_id):
+        shared_features = self.shared(x)
+        q_values = self.heads[task_id](shared_features)
+        return q_values
+```
+
+---
+
+### **Phase 05 Deliverables**
+
+1. **Optimal Training Protocol**: Best curriculum + hyperparameters
+2. **Convergence Analysis**: How training duration affects final performance
+3. **Ablation Study**: Contribution of each training improvement
+4. **Training Efficiency Metrics**: Convergence speed vs final performance
+5. **Best Model**: Checkpoint with lowest test error
+
+**Success Criteria**:
+- [ ] Mean error < 0.55m (↓ 27% from Phase 03)
+- [ ] Curriculum learning tested (at least 3 variants)
+- [ ] Hyperparameter optimization completed
+- [ ] Extended training (25K+ episodes)
+- [ ] Statistical validation across seeds
+
+---
+
+## 📊 **Phase 06: Monitoring & Evaluation**
+
+**Timeline**: Parallel to Phase 04-05 (integrated throughout)  
+**Priority**: ⭐⭐⭐ HIGH (Enables all analysis)  
+**Goal**: Comprehensive logging, analysis, and validation framework
+
+### **6.1 Enhanced Logging System**
+
+#### **Training Metrics** (logged per episode):
+
+```python
+training_log = {
+    # Performance
+    'episode': episode_number,
+    'episode_reward': total_reward,
+    'episode_length': num_steps,
+    'success': bool(reached_goal),
+    'mean_trajectory_error': np.mean(errors),
+    'max_trajectory_error': np.max(errors),
+    'final_distance': distance_to_goal,
+    
+    # Learning dynamics
+    'mean_loss': np.mean(td_losses),
+    'mean_q_value': np.mean(q_values),
+    'q_value_std': np.std(q_values),
+    'epsilon': current_epsilon,
+    'learning_rate': current_lr,
+    'grad_norm': gradient_norm,
+    
+    # State statistics
+    'state_entropy': compute_entropy(state_distribution),
+    'state_novelty': distance_to_nearest_visited_state,
+    'replay_buffer_size': len(memory),
+    'replay_buffer_diversity': unique_states / total_states,
+    
+    # Action statistics
+    'action_entropy': compute_entropy(action_distribution),
+    'exploration_rate': random_actions / total_actions,
+    'most_common_action': mode(actions),
+    'action_variance': np.var(actions),
+    
+    # Disturbance-specific
+    'disturbance_type': scenario_name,
+    'disturbance_intensity': intensity_value,
+    'disturbance_active_ratio': disturbed_steps / total_steps,
+    'error_during_disturbance': mean_error_when_disturbed,
+    'error_without_disturbance': mean_error_when_calm,
+    'recovery_time': steps_to_recover_after_disturbance,
+    
+    # Computational
+    'training_time': episode_duration_seconds,
+    'forward_pass_time': mean_inference_time,
+    'backward_pass_time': mean_backprop_time,
+}
+```
+
+#### **Testing Metrics** (per scenario × intensity):
+
+```python
+test_metrics = {
+    # Accuracy
+    'mean_error': np.mean(errors),
+    'median_error': np.median(errors),
+    'std_error': np.std(errors),
+    'min_error': np.min(errors),
+    'max_error': np.max(errors),
+    'p95_error': np.percentile(errors, 95),
+    'p99_error': np.percentile(errors, 99),
+    
+    # Success criteria
+    'success_rate': np.mean(errors < threshold),
+    'waypoint_completion_rate': waypoints_reached / total_waypoints,
+    'trajectory_completion': bool(finished_trajectory),
+    
+    # Robustness
+    'error_variance_across_episodes': np.var(episode_means),
+    'worst_case_error': max(episode_max_errors),
+    'best_case_error': min(episode_min_errors),
+    'consistency_score': 1 - (std / mean),  # Lower variance = more consistent
+    
+    # Efficiency
+    'mean_episode_length': np.mean(lengths),
+    'total_energy_consumption': sum(joint_torques * dt),
+    'smoothness_score': -sum(joint_jerks),
+    'path_efficiency': straight_line_distance / actual_path_length,
+    
+    # Temporal analysis
+    'error_over_time': errors_by_timestep,
+    'learning_curve': error_by_episode,
+    'convergence_episode': first_episode_below_threshold,
+    'plateau_episode': last_significant_improvement,
+}
+```
+
+**Experiments**:
+```
+phase_06_monitoring_evaluation/
+├── logging_infrastructure/
+│   ├── 01_basic_logging/              # Current minimal logging
+│   ├── 02_comprehensive_logging/      # All metrics above
+│   ├── 03_wandb_integration/          # Weights & Biases
+│   └── 04_tensorboard_integration/    # TensorBoard
+```
+
+---
+
+### **6.2 Real-Time Monitoring Dashboard**
+
+#### **Weights & Biases Integration**:
+
+```python
+import wandb
+
+# Initialize
+wandb.init(
+    project="robust_mm_control",
+    name=f"phase04_lstm_{timestamp}",
+    config={
+        'state_representation': 'trajectory_aware_59d',
+        'architecture': 'lstm_2layer',
+        'curriculum': 'adaptive',
+        'learning_rate': 0.001,
+        ...
+    }
+)
+
+# Log during training (every episode)
+wandb.log({
+    'train/reward': episode_reward,
+    'train/error': mean_error,
+    'train/loss': td_loss,
+    'train/epsilon': epsilon,
+    'train/q_value': mean_q_value,
+})
+
+# Log custom visualizations
+wandb.log({
+    'trajectory/3d_plot': wandb.Image(trajectory_plot),
+    'error/distribution': wandb.Histogram(errors),
+    'action/heatmap': wandb.plot.heatmap(action_matrix),
+    'q_values/over_time': wandb.plot.line_series(
+        xs=timesteps,
+        ys=[q_values_action0, q_values_action1, ...],
+        keys=action_names
+    ),
+})
+
+# Log final test results
+wandb.log({
+    'test/mean_error_per_scenario': scenario_errors,
+    'test/success_rate': success_rate,
+    'test/comparison_table': wandb.Table(dataframe=results_df),
+})
+```
+
+#### **Dashboard Views**:
+
+1. **Training Dashboard**:
+   - Loss curves (all phases overlaid)
+   - Reward progression
+   - Q-value evolution
+   - Epsilon decay
+   - Learning rate schedule
+
+2. **Performance Dashboard**:
+   - Error by scenario
+   - Error by intensity
+   - Success rate over time
+   - Comparison across phases
+
+3. **State/Action Analysis**:
+   - State distribution (t-SNE)
+   - Action frequency heatmap
+   - Exploration vs exploitation ratio
+   - State-action value landscape
+
+4. **Disturbance Analysis**:
+   - Error during vs without disturbance
+   - Recovery time distribution
+   - Scenario-specific patterns
+
+---
+
+### **6.3 Comparative Evaluation Framework**
+
+#### **Statistical Significance Testing**:
+
+```python
+from scipy import stats
+
+# Load test errors from multiple phases
+phase03_errors = load_test_errors('phase_03_algorithm_core')
+phase04_errors = load_test_errors('phase_04_state_optimization')
+phase05_errors = load_test_errors('phase_05_training_improvements')
+
+# Paired t-test (same test scenarios)
+t_stat, p_value = stats.ttest_rel(phase03_errors, phase04_errors)
+print(f"Phase 04 vs 03: t={t_stat:.3f}, p={p_value:.4f}")
+
+# Effect size (Cohen's d)
+pooled_std = np.sqrt((np.std(phase03_errors)**2 + np.std(phase04_errors)**2) / 2)
+cohen_d = (np.mean(phase04_errors) - np.mean(phase03_errors)) / pooled_std
+print(f"Effect size: d={cohen_d:.3f} ({'small' if abs(cohen_d)<0.5 else 'medium' if abs(cohen_d)<0.8 else 'large'})")
+
+# ANOVA (compare all phases)
+f_stat, p_value = stats.f_oneway(phase03_errors, phase04_errors, phase05_errors)
+
+# Post-hoc: Bonferroni correction
+from statsmodels.stats.multicomp import pairwise_tukeyhsd
+tukey_results = pairwise_tukeyhsd(all_errors, all_phase_labels)
+```
+
+#### **Multi-Phase Comparison Table**:
+
+| Phase | State Dim | Training | Mean Error ↓ | Std Error | Success % | Energy | Training Time |
+|-------|-----------|----------|--------------|-----------|-----------|--------|---------------|
+| 03 (Baseline) | 35D | 10K ep | **0.753m** | 0.071m | 100% | 67.2J | 6.5h |
+| 04A (History-3) | 105D | 10K ep | 0.635m ⭐ | 0.065m | 100% | 68.1J | 7.2h |
+| 04B (Traj-3) | 59D | 10K ep | 0.612m ⭐⭐ | 0.058m | 100% | 64.3J ⭐ | 6.8h |
+| 04C (LSTM) | 35D | 15K ep | 0.578m ⭐⭐⭐ | 0.052m ⭐ | 100% | 66.8J | 11.2h |
+| 05A (Curriculum) | 59D | 15K ep | 0.545m ⭐⭐⭐ | 0.048m ⭐⭐ | 100% | 62.1J ⭐⭐ | 8.5h |
+| 05B (Extended) | 59D | 50K ep | 0.521m ⭐⭐⭐ | 0.045m ⭐⭐⭐ | 100% | 61.5J ⭐⭐ | 28.0h |
+
+**Statistical Report**:
+```
+Phase 05B vs Phase 03:
+  - Mean error reduction: 30.8% (0.753m → 0.521m)
+  - Paired t-test: t=-18.45, p<0.001 ***
+  - Effect size: d=3.12 (very large)
+  - Conclusion: Highly significant improvement
+```
+
+---
+
+### **6.4 Ablation Studies**
+
+Systematically remove components to measure their contribution:
+
+#### **State Representation Ablation**:
+
+```python
+# Full state (Phase 04 best)
+baseline = train_and_evaluate(state='full_59d')
+
+# Remove each feature group
+ablations = {
+    'no_trajectory': train_and_evaluate(state='full - future_waypoints'),
+    'no_velocity': train_and_evaluate(state='full - joint_velocities'),
+    'no_imu': train_and_evaluate(state='full - imu_data'),
+    'no_progress': train_and_evaluate(state='full - progress_metrics'),
+    'minimal': train_and_evaluate(state='ee_pose + goal_pose'),  # 6D
+}
+
+# Compute contribution of each group
+for name, performance in ablations.items():
+    contribution = baseline_error - performance_error
+    print(f"{name}: {contribution:.3f}m contribution")
+
+# Result:
+#   trajectory features: 0.082m (most important!)
+#   velocity features: 0.045m
+#   progress metrics: 0.038m
+#   imu data: 0.025m
+```
+
+#### **Architecture Ablation**:
+
+```python
+ablations = {
+    'no_batchnorm': train_dqn(batchnorm=False),
+    'no_dropout': train_dqn(dropout=0.0),
+    'single_hidden': train_dqn(layers=[256]),
+    'no_target_network': train_dqn(target_update=None),
+    'small_replay': train_dqn(buffer_size=1000),
+}
+```
+
+#### **Training Technique Ablation**:
+
+```python
+ablations = {
+    'no_curriculum': train_dqn(curriculum=None),
+    'no_prioritized_replay': train_dqn(prioritized=False),
+    'constant_lr': train_dqn(lr_schedule='constant'),
+    'no_grad_clip': train_dqn(grad_clip=None),
+}
+```
+
+**Experiments**:
+```
+phase_06_monitoring_evaluation/
+├── ablation_studies/
+│   ├── 01_state_representation/
+│   ├── 02_architecture_components/
+│   ├── 03_training_techniques/
+│   └── 04_summary_report/
+```
+
+---
+
+### **6.5 Failure Analysis**
+
+Systematically analyze unsuccessful episodes:
+
+#### **Failure Classification**:
+
+```python
+failure_categories = {
+    'high_initial_error': [],      # Started far from trajectory
+    'trajectory_divergence': [],    # Drifted off path gradually
+    'disturbance_failure': [],      # Couldn't reject disturbance
+    'oscillation': [],              # Unstable control (chattering)
+    'timeout': [],                  # Didn't converge within time limit
+    'joint_limit': [],              # Hit joint constraints
+}
+
+# Classify each failed episode
+for episode in failed_episodes:
+    if episode['initial_error'] > 1.0:
+        category = 'high_initial_error'
+    elif episode['max_oscillation'] > threshold:
+        category = 'oscillation'
+    elif episode['disturbance_active'] and episode['error_spike']:
+        category = 'disturbance_failure'
+    # ... etc
+    
+    failure_categories[category].append(episode)
+
+# Generate report
+for category, episodes in failure_categories.items():
+    print(f"{category}: {len(episodes)} failures ({len(episodes)/total*100:.1f}%)")
+    
+    # Show example
+    worst_case = max(episodes, key=lambda e: e['max_error'])
+    plot_failure_case(worst_case, save_path=f"failures/{category}_example.png")
+```
+
+#### **Qualitative Analysis**:
+
+- **Video recordings**: Best/worst/median episodes
+- **3D trajectory visualizations**: Planned vs actual path
+- **Joint angle profiles**: Detect unusual patterns
+- **Q-value evolution**: Show decision-making during critical moments
+- **State distribution**: Are failures in unexplored regions?
+
+**Experiments**:
+```
+phase_06_monitoring_evaluation/
+├── failure_analysis/
+│   ├── 01_failure_classification/
+│   ├── 02_failure_videos/
+│   ├── 03_failure_patterns/
+│   └── 04_improvement_suggestions/
+```
+
+---
+
+### **6.6 Validation & Robustness Testing**
+
+#### **Cross-Validation** (Generalization test):
+
+```python
+# Train on 4 scenarios, test on held-out 5th
+scenarios = ['none', 'random', 'periodic', 'continuous', 'impulse']
+
+for held_out in scenarios:
+    train_scenarios = [s for s in scenarios if s != held_out]
+    agent = train_dqn(scenarios=train_scenarios, episodes=8000)
+    
+    # Test on unseen scenario
+    test_error = evaluate(agent, scenario=held_out, episodes=100)
+    print(f"Held-out {held_out}: {test_error:.3f}m")
+    
+    # Compare to training on all scenarios
+    baseline_error = phase05_results[held_out]
+    generalization_gap = test_error - baseline_error
+    print(f"  Generalization gap: {generalization_gap:.3f}m")
+
+# Result: Does agent generalize to unseen disturbance types?
+```
+
+#### **Out-of-Distribution (OOD) Testing**:
+
+```python
+# Test with conditions beyond training distribution
+ood_tests = {
+    'extreme_intensity': test_with_intensity(1.5 * intensity_golden),
+    'high_sensor_noise': test_with_noise(imu_std * 3.0),
+    'model_mismatch': test_with_mass(husky_mass * 1.5),
+    'complex_trajectory': test_with_trajectory('random_3d_path'),
+    'combined_disturbances': test_with_multi_disturbance(['periodic', 'random']),
+}
+
+# Measure robustness to distribution shift
+for test_name, test_error in ood_tests.items():
+    baseline = phase05_results['mean']
+    degradation = (test_error - baseline) / baseline * 100
+    print(f"{test_name}: {test_error:.3f}m ({degradation:+.1f}% degradation)")
+```
+
+#### **Long-Term Deployment Simulation**:
+
+```python
+# Test for performance drift over extended operation
+long_term_test = evaluate(
+    agent=best_agent,
+    episodes=1000,  # Much longer than training
+    record_every=10
+)
+
+# Check for:
+# - Performance degradation over time
+# - Consistent behavior across episodes
+# - Rare failure modes (>3σ events)
+```
+
+---
+
+### **Phase 06 Deliverables**
+
+1. **Logging Infrastructure**: Comprehensive metric collection system
+2. **Monitoring Dashboard**: Real-time training visualization (W&B/TensorBoard)
+3. **Comparative Analysis Report**: Statistical comparison across all phases
+4. **Ablation Study Results**: Contribution of each component
+5. **Failure Analysis**: Classification and patterns of unsuccessful episodes
+6. **Validation Report**: Generalization and robustness testing
+
+**Success Criteria**:
+- [ ] All metrics logged to W&B/TensorBoard
+- [ ] Statistical significance established (p < 0.05)
+- [ ] Ablation studies completed (at least 5 components)
+- [ ] Failure modes classified and analyzed
+- [ ] OOD testing performed
+- [ ] Publication-ready figures generated
+
+---
+
+## 🚀 **Advanced Research Directions** ⭐ NOVEL CONTRIBUTIONS
 
 ### **1. Advanced RL Algorithms**
 
 **Beyond DQN: State-of-the-Art Methods**
 
+**Timeline**: 3-6 months (after Phase 04-06)  
+**Priority**: ⭐⭐ MEDIUM-HIGH (Research extension)
+
 #### **DDPG (Deep Deterministic Policy Gradient)**
 - **Advantage**: Continuous action space (joint velocities instead of discrete increments)
 - **Application**: Smoother, more natural robot movements
-- **Expected Improvement**: Higher precision, faster convergence
+- **Expected Improvement**: Higher precision through continuous control
 - **Implementation**: Actor-critic architecture with deterministic policy
+- **When to use**: After Phase 05, if discrete actions limiting performance
 
 #### **SAC (Soft Actor-Critic)**
 - **Advantage**: Maximum entropy RL for robust exploration
-- **Application**: Better handling of stochastic environments
-- **Expected Improvement**: More robust policies, sample efficiency
-- **Implementation**: Temperature parameter for exploration-exploitation balance
+- **Application**: Better handling of stochastic disturbance environments
+- **Expected Improvement**: More robust policies, better sample efficiency
+- **Implementation**: Temperature parameter α for exploration-exploitation balance
+- **Novel contribution**: SAC + dual-intensity training
 
 #### **Rainbow DQN Extensions**
-- **Components**: Dueling networks, Double DQN, Prioritized replay, Multi-step learning
+- **Components**: Dueling networks, Double DQN, Prioritized replay, Multi-step learning, Noisy Nets, Distributional RL
 - **Application**: Enhanced DQN performance on existing scenarios
-- **Expected Improvement**: 10-15% success rate increase over standard DQN
-- **Implementation**: Modular integration of Rainbow components
-
-### **2. Curriculum Learning**
-
-**Gradual Intensity Progression Training**
-
-#### **Progressive Difficulty Scaling**
-- **Method**: Start with normal intensity, gradually increase to golden ratio
-- **Schedule**: Linear, exponential, or adaptive progression
-- **Hypothesis**: Smoother learning curve, better final performance
-- **Measurement**: Convergence speed vs final performance trade-off
-
-#### **Scenario Complexity Ordering**
-- **Phase 3a**: None → Continuous → Periodic
-- **Phase 3b**: Random → Impulse (most challenging last)
-- **Rationale**: Learn fundamental skills before tackling complex disturbances
-- **Expected**: Faster overall training, higher success rates
-
-### **3. Real-World Validation**
-
-**Sim-to-Real Transfer Experiments**
-
-#### **Hardware Implementation**
-- **Platform**: Physical Husky + KUKA system
-- **Sensors**: Real IMU integration (MPU-6050 or similar)
-- **Environment**: Controlled lab setup with known disturbances
-- **Validation**: Compare sim vs real performance
-
-#### **Domain Randomization**
-- **Physics Parameters**: Friction, mass, joint stiffness variation
-- **Sensor Noise**: Realistic IMU noise profiles
-- **Visual Variation**: Lighting, textures, backgrounds
-- **Purpose**: Bridge sim-to-real gap
-
-#### **Real Disturbance Studies**
-- **External Forces**: Controlled mechanical disturbances
-- **Environmental**: Wind, vibration, surface irregularities  
-- **Human Interaction**: Person pushing/pulling robot
-- **Validation**: Test dual-intensity training effectiveness
-
-## 🔬 **Experimental Design Framework**
-
-### **Phase 3A: Advanced Algorithms**
-
-**Timeline**: 3-6 months  
-**Priority**: High (immediate research extension)
-
-```
-Phase 3A Structure:
-├── ddpg_experiments/
-│   ├── continuous_action_baseline/
-│   ├── dual_intensity_training/
-│   └── dqn_comparison/
-├── sac_experiments/
-│   ├── entropy_tuning/
-│   ├── dual_intensity_training/
-│   └── algorithm_comparison/
-└── rainbow_dqn_experiments/
-    ├── component_ablation/
-    ├── full_rainbow_implementation/
-    └── performance_comparison/
-```
-
-### **Phase 3B: Curriculum Learning**
-
-**Timeline**: 2-4 months  
-**Priority**: Medium (methodological improvement)
-
-```
-Phase 3B Structure:
-├── intensity_progression/
-│   ├── linear_curriculum/
-│   ├── exponential_curriculum/
-│   └── adaptive_curriculum/
-├── scenario_ordering/
-│   ├── difficulty_based_progression/
-│   ├── skill_building_sequence/
-│   └── random_baseline_comparison/
-└── curriculum_analysis/
-    ├── learning_curve_analysis/
-    ├── final_performance_comparison/
-    └── training_efficiency_metrics/
-```
-
-### **Phase 3C: Real-World Validation**
-
-**Timeline**: 6-12 months  
-**Priority**: High (practical validation)
-
-```
-Phase 3C Structure:
-├── hardware_setup/
-│   ├── system_integration/
-│   ├── sensor_calibration/
-│   └── safety_protocols/
-├── sim_to_real_transfer/
-│   ├── domain_randomization/
-│   ├── fine_tuning_experiments/
-│   └── performance_validation/
-└── real_world_studies/
-    ├── controlled_disturbances/
-    ├── natural_environment_tests/
-    └── long_term_deployment/
-```
-
-## 🎯 **Research Questions**
-
-### **Algorithm Performance**
-1. Can continuous action spaces (DDPG/SAC) outperform discrete DQN?
-2. Which Rainbow DQN components provide the most benefit for mobile manipulation?
-3. How does maximum entropy training (SAC) affect robustness?
-
-### **Training Methodology**
-1. Does curriculum learning improve final performance vs training time?
-2. What is the optimal intensity progression schedule?
-3. Can adaptive curricula outperform fixed progression?
-
-### **Real-World Transfer**
-1. How much performance is lost in sim-to-real transfer?
-2. Which domain randomization techniques are most effective?
-3. Do dual-intensity trained policies transfer better to real hardware?
-
-## 📊 **Expected Outcomes**
-
-### **Performance Targets**
-- **Advanced Algorithms**: 85-90% success rate (vs 79.9% DQN baseline)
-- **Curriculum Learning**: 20-30% faster convergence
-- **Real-World Transfer**: 70-80% of simulation performance
-
-### **Academic Contributions**
-- **Comprehensive Algorithm Study**: DDPG/SAC/Rainbow comparison for mobile manipulation
-- **Curriculum Learning Framework**: Systematic approach to RL training progression
-- **Sim-to-Real Validation**: Practical deployment of dual-intensity training
-
-## 🛠️ **Implementation Requirements**
-
-### **Software Dependencies**
-- **Stable-Baselines3**: DDPG, SAC implementations
-- **Ray[RLlib]**: Distributed training and hyperparameter tuning
-- **Weights & Biases**: Experiment tracking and visualization
-- **OpenAI Gym**: Environment standardization
-
-### **Hardware Requirements**
-- **Simulation**: High-performance GPU for faster training
-- **Real Robot**: Husky mobile base + KUKA arm
-- **Sensors**: High-quality IMU, force/torque sensors
-- **Compute**: Edge computing for real-time inference
-
-### **Timeline Considerations**
-- **Phase 3A**: Can start immediately with existing simulation
-- **Phase 3B**: Requires Phase 3A algorithm selection
-- **Phase 3C**: Requires hardware procurement and setup
-
-## 🔗 **Integration with Current Work**
-
-### **Building on Phase 1 & 2**
-- **Baseline Comparisons**: Use Phase 1 & 2 results as benchmarks
-- **Methodology**: Apply dual-intensity training to all new algorithms
-- **Evaluation**: Use same robustness metrics for consistency
-
-### **Data Management**
-- **Consistent Structure**: Follow established phase-based organization
-- **Version Control**: Track algorithm implementations and hyperparameters
-- **Reproducibility**: Maintain same documentation standards
-
-## 📅 **Priority Roadmap**
-
-### **Immediate (Next 3 months)**
-1. Complete Phase 1 & 2 (DQN baseline + Q-Learning dual-intensity)
-2. Begin Phase 3A: DDPG implementation and testing
-3. Literature review: Advanced RL for mobile manipulation
-
-### **Medium-term (3-6 months)**
-1. Complete Phase 3A: All advanced algorithms tested
-2. Begin Phase 3B: Curriculum learning experiments
-3. Hardware procurement for Phase 3C
-
-### **Long-term (6-12 months)**
-1. Phase 3C: Real-world validation studies
-2. Comprehensive comparison across all phases
-3. Academic publication preparation
+- **Expected Improvement**: 5-10% error reduction over vanilla DQN
+- **Implementation**: Modular integration - test each component separately
+- **Note**: Prioritized replay already included in Phase 05
 
 ---
 
-**Last Updated**: October 26, 2025  
-**Status**: Planning Stage  
-**Next Action**: Complete Phase 1 & 2 before Phase 3 initiation
+## 🎓 **Phase 07: Transfer Learning & Multi-Task** (Optional)
+
+**Timeline**: 4-6 weeks  
+**Priority**: ⭐ MEDIUM (Research depth)  
+**Goal**: Investigate knowledge transfer and multi-task capabilities
+
+### **7.1 Multi-Task Learning**
+
+Train single agent on all scenarios simultaneously:
+
+```python
+# Instead of separate agents per scenario:
+# Train one agent with scenario as part of state
+
+state_with_context = [
+    base_state,              # 35D or 59D
+    scenario_embedding,      # 5D one-hot: [none, random, periodic, continuous, impulse]
+]
+
+# Agent learns:
+# - Shared features (general control)
+# - Scenario-specific strategies
+```
+
+**Benefits**:
+- Knowledge transfer between scenarios
+- Single model deployment
+- Faster adaptation to new disturbances
+
+### **7.2 Pre-training & Fine-tuning**
+
+```python
+# Stage 1: Pre-train on easy scenarios
+agent_pretrained = train_dqn(
+    scenarios=['none', 'continuous'],
+    episodes=5000
+)
+
+# Stage 2: Fine-tune on hard scenarios
+agent_finetuned = finetune_dqn(
+    agent=agent_pretrained,
+    scenarios=['random', 'impulse'],
+    episodes=2000,
+    learning_rate=0.0001  # Lower LR for fine-tuning
+)
+
+# Measure: Does pre-training accelerate learning on hard scenarios?
+```
+
+### **7.3 Meta-Learning** (Advanced)
+
+Learn to adapt quickly to new disturbances:
+
+```python
+# MAML (Model-Agnostic Meta-Learning)
+# Train on multiple disturbance types
+# Meta-objective: Fast adaptation to unseen disturbances
+
+# Use case: Quickly adapt to new disturbance with just 10-50 episodes
+```
+
+---
+
+## 🔍 **Phase 08: Explainability & Interpretability**
+
+**Timeline**: 2-3 weeks  
+**Priority**: ⭐⭐ MEDIUM-HIGH (For thesis defense & publication)  
+**Goal**: Understand what the agent learned and why it works
+
+### **8.1 Feature Importance Analysis**
+
+```python
+# Which state features does the agent rely on most?
+
+# Method 1: Gradient-based saliency
+saliency = compute_gradient(q_values, wrt=state)
+important_features = np.argsort(np.abs(saliency))[-10:]
+
+# Method 2: Occlusion analysis  
+for feature_idx in range(state_dim):
+    state_occluded = state.copy()
+    state_occluded[feature_idx] = 0  # Mask feature
+    q_occluded = agent.get_q_values(state_occluded)
+    importance[feature_idx] = abs(q_original - q_occluded)
+
+# Result: "Trajectory features are 3× more important than IMU data"
+```
+
+### **8.2 Policy Visualization**
+
+```python
+# Visualize what the agent learned
+
+# Q-value landscape (2D slice)
+for x in x_range:
+    for y in y_range:
+        state = create_state(x, y, fixed_others)
+        q_values[x, y] = agent.get_q_values(state)
+
+plt.contourf(x_range, y_range, q_values)
+plt.title("Q-value landscape: EE position vs goal")
+
+# Action probability heatmap
+# Shows: Where does agent choose each action?
+```
+
+### **8.3 Learned Representation Analysis**
+
+```python
+# Visualize hidden layer activations
+
+# Extract activations for many states
+activations = []
+labels = []
+for episode in test_episodes:
+    for state in episode:
+        h = agent.get_hidden_activation(state)
+        activations.append(h)
+        labels.append(episode.scenario)
+
+# Dimensionality reduction
+from sklearn.manifold import TSNE
+embedded = TSNE(n_components=2).fit_transform(activations)
+
+# Plot: Do states cluster by disturbance type?
+plt.scatter(embedded[:, 0], embedded[:, 1], c=labels)
+plt.title("Learned state representation (t-SNE)")
+
+# Result: "Agent learned to separate disturbance types in hidden space"
+```
+
+### **8.4 Attention Visualization** (If using Transformer)
+
+```python
+# Show which past states the agent attends to
+
+attention_weights = agent.get_attention_weights(state_sequence)
+
+plt.imshow(attention_weights)
+plt.xlabel("Key position (past states)")
+plt.ylabel("Query position (current state)")
+plt.title("Self-attention weights")
+
+# Result: "Agent attends to states 5 timesteps ago (when disturbance started)"
+```
+
+---
+
+## 📊 **Summary: Phase Progression & Dependencies**
+
+```
+Phase 01: Baseline Testing (✅ Complete)
+    ↓
+Phase 02: Dual-Intensity Training (✅ Complete)
+    ↓
+Phase 03: Algorithm Comparison (✅ Complete)
+    ├─ DQN: 0.753m error, 100% success
+    └─ Q-Learning: 0.756m error, 100% success
+    ↓
+    |
+Phase 04: State Optimization (🚀 Next - 4-6 weeks)
+    ├── 4.1 Temporal history (3-5 steps)
+    ├── 4.2 Trajectory integration ⭐ (future waypoints)
+    ├── 4.3 Enhanced features (disturbance, control quality)
+    ├── 4.4 Recurrent architectures (LSTM, GRU, Transformer)
+    ├── 4.5 Hierarchical representations
+    └── 4.6 Network architecture variants
+    │
+    ├─ Expected: 0.55-0.65m error (↓ 13-27%)
+    └─ Best state representation selected
+    ↓
+    |
+Phase 05: Training Improvements (6-8 weeks)
+    ├── 5.1 Curriculum learning ⭐
+    │   ├─ Intensity curriculum (linear, exp, adaptive)
+    │   ├─ Scenario curriculum (easy→hard)
+    │   └─ Multi-dimensional curriculum
+    ├── 5.2 Hyperparameter optimization
+    │   ├─ Grid search / Bayesian / PBT
+    │   └─ Learning rate schedules
+    ├── 5.3 Extended training (25K-50K episodes)
+    ├── 5.4 Advanced techniques (PER, HER, n-step)
+    └── 5.5 Multi-task learning
+    │
+    ├─ Expected: 0.50-0.55m error (↓ 27-34%)
+    └─ Optimal training protocol established
+    ↓
+    |
+Phase 06: Monitoring & Evaluation (Parallel to 04-05)
+    ├── 6.1 Comprehensive logging system
+    ├── 6.2 Real-time dashboard (W&B/TensorBoard)
+    ├── 6.3 Statistical comparison framework
+    ├── 6.4 Ablation studies
+    ├── 6.5 Failure analysis
+    └── 6.6 Validation & robustness testing
+    │
+    └─ Publication-ready analysis complete
+    ↓
+    |
+Phase 07: Transfer Learning (Optional - 4 weeks)
+    ├── Multi-task learning
+    ├── Pre-training & fine-tuning
+    └── Meta-learning (MAML)
+    ↓
+    |
+Phase 08: Explainability (2-3 weeks)
+    ├── Feature importance analysis
+    ├── Policy visualization
+    ├── Learned representation (t-SNE)
+    └── Attention visualization
+```
+
+**Total Timeline**: 
+- Core phases (04-06): ~4-5 months
+- With advanced topics (07-08): ~6-7 months
+
+---
+
+## 🎯 **Expected Outcomes & Novel Contributions**
+
+### **Performance Targets**
+
+| Phase | Mean Error | Improvement | Success Rate | Novel Contribution |
+|-------|------------|-------------|--------------|-------------------|
+| 03 (Baseline) | 0.753m | - | 100% | Dual-intensity DQN baseline |
+| 04 (State Opt) | 0.55-0.65m | ↓ 13-27% | 100% | **Trajectory-integrated state** |
+| 05 (Training) | 0.50-0.55m | ↓ 27-34% | 100% | **Adaptive curriculum learning** |
+| 07 (Transfer) | 0.48-0.52m | ↓ 30-36% | 100% | **Multi-task disturbance rejection** |
+
+### **Academic Contributions**
+
+1. ✅ **Dual-Intensity Training Methodology** (Phase 02-03)
+   - Normal vs golden ratio disturbance intensities
+   - Comprehensive 5-scenario evaluation framework
+
+2. 🚀 **Trajectory-Integrated State Representation** (Phase 04)
+   - Future waypoint lookahead for planning
+   - 15-25% error reduction demonstrated
+   - **Novel for mobile manipulation RL**
+
+3. 🚀 **Adaptive Curriculum Learning** (Phase 05)
+   - Performance-based difficulty adjustment
+   - Self-paced learning for robotic control
+   - **Novel contribution to curriculum RL**
+
+4. 🚀 **Comprehensive Disturbance Rejection Evaluation** (Phase 06)
+   - 5 disturbance types × 2 intensities
+   - Statistical validation framework
+   - Failure mode analysis
+   - **Most thorough mobile manipulator evaluation**
+
+### **Publication Plan**
+
+**Paper 1**: "Dual-Intensity Training for Robust Mobile Manipulator Control via Deep Reinforcement Learning"
+- Sections: Phase 01-03
+- Venue: ICRA / IROS / RA-L
+- Status: Can submit after Phase 03 ✅
+
+**Paper 2**: "Trajectory-Integrated State Representations for Enhanced Deep RL in Mobile Manipulation"
+- Sections: Phase 04 focus
+- Venue: IROS / CoRL
+- Status: After Phase 04 completion
+
+**Paper 3** (Thesis/Extended): "From State Representation to Curriculum Learning: A Comprehensive Study of Deep RL for Robust Mobile Manipulator Control"
+- Sections: All phases 01-08
+- Venue: Journal (T-RO / IJRR)
+- Status: After Phase 06 completion
+
+---
+
+## 🛠️ **Implementation Requirements**
+
+### **Software Stack**
+
+**Core Dependencies** (Already have):
+- PyBullet 3.2.5
+- PyTorch 2.0+
+- NumPy, SciPy
+- Matplotlib
+
+**New Dependencies** (For Phase 04-06):
+```bash
+# Experiment tracking
+pip install wandb tensorboard
+
+# Hyperparameter optimization
+pip install optuna ray[tune] ray[rllib]
+
+# Statistical analysis
+pip install scipy scikit-learn statsmodels
+
+# Visualization
+pip install seaborn plotly
+
+# Advanced RL (Phase 07)
+pip install stable-baselines3
+```
+
+### **Hardware Requirements**
+
+**Current** (Phase 03):
+- CPU: Sufficient for 10K episodes
+- GPU: Optional (speeds up DQN training 2-3×)
+
+**Recommended** (Phase 04-06):
+- GPU: NVIDIA RTX 3060+ or better
+  - Required for LSTM/Transformer training
+  - Speeds up hyperparameter search 10×
+- RAM: 16GB+ (for large replay buffers)
+- Storage: 100GB+ (for comprehensive logging)
+
+**Distributed Training** (Phase 05 hyperparameter search):
+- Multiple GPUs or cloud compute (Ray cluster)
+- For parallel hyperparameter trials
+
+### **Data Management**
+
+```
+Expected storage per phase:
+- Phase 04: ~20GB (multiple architectures × ablations)
+- Phase 05: ~50GB (hyperparameter search + extended training)
+- Phase 06: ~30GB (comprehensive logging + visualizations)
+Total: ~100GB for Phase 04-06
+```
+
+---
+
+## 🚦 **Prioritized Next Steps**
+
+### **Immediate (Next 2 weeks)**
+
+1. ✅ **Complete Phase 03 documentation** 
+   - Phase 02 vs 03 comparison ✅
+   - Algorithm analysis complete ✅
+
+2. 🚀 **Set up Phase 06 infrastructure first** (Parallel work)
+   - [ ] Integrate Weights & Biases logging
+   - [ ] Create comprehensive metrics collection
+   - [ ] Set up real-time dashboard
+   - **Rationale**: Need this for Phase 04-05 experiments
+
+3. 🚀 **Begin Phase 04.2** (Highest ROI)
+   - [ ] Modify `rl_mission_env.py` to add trajectory features
+   - [ ] Implement 59D state: [base_35D + next_3_waypoints_18D + progress_6D]
+   - [ ] Train baseline comparison
+   - **Expected**: 1 week implementation + 1 week training
+
+### **Short-term (Weeks 3-6)**
+
+4. **Phase 04 systematic exploration**
+   - [ ] Test temporal history variants (4.1)
+   - [ ] Test trajectory integration variants (4.2)
+   - [ ] Test enhanced features (4.3)
+   - [ ] Compare architectures (4.4)
+   - [ ] Select best configuration
+
+5. **Phase 04 recurrent exploration** (If time permits)
+   - [ ] Implement LSTM-DQN
+   - [ ] Compare vs feedforward
+   - [ ] Analyze temporal reasoning
+
+### **Medium-term (Weeks 7-14)**
+
+6. **Phase 05: Curriculum learning**
+   - [ ] Implement adaptive curriculum (novel)
+   - [ ] Compare curriculum strategies
+   - [ ] Extended training runs (25K-50K episodes)
+
+7. **Phase 05: Hyperparameter optimization**
+   - [ ] Bayesian optimization (Optuna)
+   - [ ] Select best configuration
+
+8. **Phase 06: Comprehensive evaluation**
+   - [ ] Statistical comparison all phases
+   - [ ] Ablation studies
+   - [ ] Failure analysis
+   - [ ] Validation testing
+
+### **Long-term (Months 4-6)**
+
+9. **Phase 07-08** (If time permits)
+   - Multi-task learning
+   - Explainability analysis
+
+10. **Publication preparation**
+    - Paper 2: Trajectory-integrated states
+    - Thesis chapters complete
+
+---
+
+## 📚 **Related Work & Inspiration**
+
+### **State Representation**
+- **Temporal**: DRQN (Hausknecht & Stone, 2015)
+- **Hierarchical**: Feudal Networks (Vezhnevets et al., 2017)
+- **Attention**: Relational RL (Zambaldi et al., 2018)
+
+### **Curriculum Learning**
+- **RL Curriculum**: Graves et al. (2017) - Automated curriculum
+- **Teacher-Student**: Bengio et al. (2009) - Curriculum learning foundations
+- **Self-Paced**: Jiang et al. (2015) - Self-paced learning
+
+### **Mobile Manipulation**
+- **RL for MM**: Kalakrishnan et al. (2011) - PI²
+- **Disturbance Rejection**: Levine et al. (2016) - End-to-end learning
+
+---
+
+## 🎓 **Thesis Structure Integration**
+
+**Chapter 3**: Methodology
+- 3.1 Problem Formulation
+- 3.2 Dual-Intensity Training (Phase 02-03)
+- **3.3 Enhanced State Representation (Phase 04)** ⭐
+- **3.4 Curriculum Learning Strategy (Phase 05)** ⭐
+
+**Chapter 4**: Experimental Setup
+- 4.1 Simulation Environment
+- 4.2 Evaluation Metrics (Phase 06)
+- 4.3 Statistical Analysis Framework
+
+**Chapter 5**: Results & Analysis
+- 5.1 Baseline Performance (Phase 03)
+- **5.2 State Representation Ablation (Phase 04)**
+- **5.3 Training Optimization Results (Phase 05)**
+- 5.4 Comparative Evaluation (Phase 06)
+- 5.5 Failure Analysis & Robustness
+
+**Chapter 6**: Discussion
+- 6.1 Key Findings
+- 6.2 Limitations
+- **6.3 Explainability Analysis (Phase 08)**
+
+**Chapter 7**: Conclusion & Future Work
+- Phase 07+ directions
+
+---
+
+## ✅ **Success Criteria Summary**
+
+### **Phase 04: State Optimization**
+- [ ] Mean error < 0.65m (↓13%+ from baseline)
+- [ ] At least 5 state variants tested
+- [ ] Recurrent architecture evaluated
+- [ ] Statistical significance established
+- [ ] Best configuration documented
+
+### **Phase 05: Training Improvements**  
+- [ ] Mean error < 0.55m (↓27%+ from baseline)
+- [ ] Curriculum learning strategies compared (≥3)
+- [ ] Hyperparameter optimization completed
+- [ ] Extended training (25K+ episodes)
+- [ ] Optimal protocol documented
+
+### **Phase 06: Monitoring & Evaluation**
+- [ ] W&B/TensorBoard integration complete
+- [ ] All metrics logged comprehensively
+- [ ] Statistical comparison (p-values reported)
+- [ ] Ablation studies (≥5 components)
+- [ ] Failure modes analyzed
+- [ ] Publication-ready figures generated
+
+---
+
+## 💬 **Open Research Questions**
+
+1. **State Representation**:
+   - How many future waypoints is optimal? (1, 3, 5, or entire trajectory?)
+   - Does temporal history help more than trajectory features?
+   - Can attention mechanisms replace manual feature engineering?
+
+2. **Training**:
+   - What's the optimal curriculum schedule? (Linear, exponential, adaptive?)
+   - Is there benefit beyond 25K episodes, or does performance plateau?
+   - Can we pre-train on simulation, fine-tune on real robot?
+
+3. **Generalization**:
+   - Can agent generalize to unseen disturbance types?
+   - How robust is the policy to parameter variations?
+   - Does multi-task training improve individual task performance?
+
+4. **Explainability**:
+   - What features does the agent actually use for decisions?
+   - Can we extract interpretable rules from the learned policy?
+   - How does the agent's strategy differ across disturbance types?
+
+---
+
+**Last Updated**: November 5, 2025  
+**Status**: Phase 04-06 detailed planning complete  
+**Next Action**: Begin Phase 06 logging infrastructure + Phase 04.2 implementation
+
+---
+
+## 📎 **Appendix: Quick Reference**
+
+### **Key Metrics**
+- **Mean Error**: Primary metric (lower is better)
+- **Success Rate**: Episodes with error < threshold
+- **Consistency**: 1 - (std/mean)
+- **Energy**: Total joint torque magnitude
+- **Training Time**: Wall-clock hours
+
+### **Phase Naming Convention**
+```
+phase_XX_<name>/
+  ├── XX_<experiment>/
+  │   ├── session_data/
+  │   │   ├── checkpoints/
+  │   │   ├── metrics/
+  │   │   └── logs/
+  │   └── analysis/
+  └── README.md
+```
+
+### **Contact & Collaboration**
+- GitHub Issues: For technical questions
+- W&B Project: `robust_mm_control`
+- Documentation: `/training_data/phase_0X/`
+
+---
+
+*This planning document is a living document and will be updated as research progresses.*
+
+---
+
+## 🤖 **Future Directions: Real-World Validation** (Phase 09+)
+
+**Timeline**: 6-12 months (Long-term)  
+**Priority**: ⭐ MEDIUM (After simulation work complete)  
+**Goal**: Sim-to-real transfer and hardware deployment
+
+### **Hardware Implementation**
+- **Platform**: Physical Husky + KUKA system
+- **Sensors**: Real IMU integration (MPU-6050 or equivalent)
+- **Environment**: Controlled lab setup with known disturbances
+- **Validation**: Compare simulation vs real-world performance
+
+### **Domain Randomization**
+- **Physics Parameters**: Friction, mass, joint stiffness variation
+- **Sensor Noise**: Realistic IMU noise profiles  
+- **Visual Variation**: Lighting, textures, backgrounds
+- **Purpose**: Bridge sim-to-real gap, improve transfer
+
+### **Real Disturbance Studies**
+- **External Forces**: Controlled mechanical disturbances
+- **Environmental**: Wind, vibration, surface irregularities
+- **Human Interaction**: Person pushing/pulling robot
+- **Validation**: Test dual-intensity training effectiveness on hardware
+
+**Note**: This is future work pending hardware availability and funding.
+
+---
