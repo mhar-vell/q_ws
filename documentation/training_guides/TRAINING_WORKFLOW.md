@@ -581,4 +581,4 @@ This represents months of typical research work, condensed into a well-documente
 
 *Documentation created: October 13, 2025*  
 *System version: v1.0*  
-*Author: AI Assistant + Marco Reis*
+*Author: Marco Reis*

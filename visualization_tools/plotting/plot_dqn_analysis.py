@@ -29,8 +29,8 @@ plt.rcParams['axes.labelsize'] = 11
 
 # Paths
 BASE_DIR = Path(__file__).parent.parent.parent
-METRICS_PATH = BASE_DIR / 'training_data/phase_algorithm_core/dqn_algorithm_core/session_data/metrics/rl_metrics_dqn.json'
-OUTPUT_DIR = BASE_DIR / 'training_data/phase_algorithm_core/algorithm_analysis/plots'
+METRICS_PATH = BASE_DIR / 'training_data/phase_03_algorithm_core/dqn_algorithm_core/session_data/metrics/rl_metrics_dqn.json'
+OUTPUT_DIR = BASE_DIR / 'training_data/phase_03_algorithm_core/algorithm_analysis/plots'
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 print("="*70)

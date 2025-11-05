@@ -212,7 +212,7 @@ src/
 
 ```
 training_data/
-├── phase_algorithm_core/     ~500 MB (110 .pth + 109 .pkl)
+├── phase_03_algorithm_core/     ~500 MB (110 .pth + 109 .pkl)
 ├── phase_02_dual_intensity/  ~200 MB
 ├── phase_01_baseline/        ~100 MB
 └── consolidated_models/      ~150 MB
@@ -229,7 +229,7 @@ training_data/
 #### Archive Strategy
 ```bash
 # Archive intermediate checkpoints
-cd training_data/phase_algorithm_core
+cd training_data/phase_03_algorithm_core
 tar -czf archived_intermediate_checkpoints.tar.gz \
     */session_data/checkpoints/*/rl_checkpoint_*_ep[1-9]00_*.{pth,pkl}
 
@@ -334,7 +334,7 @@ robust_mm_control_ws/
 │
 ├── training_data/                     ✅ Well organized
 │   ├── README_TEMPLATE.md            ✅
-│   ├── phase_algorithm_core/         ✅ Just organized
+│   ├── phase_03_algorithm_core/         ✅ Just organized
 │   ├── phase_02_dual_intensity_main/ ✅
 │   ├── phase_01_baseline_testing/    ✅
 │   └── consolidated_models/          ✅

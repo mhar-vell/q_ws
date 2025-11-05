@@ -1,5 +1,5 @@
 #!/bin/bash
-# Generate all analysis visualizations for phase_algorithm_core
+# Generate all analysis visualizations for phase_03_algorithm_core
 
 echo "=========================================="
 echo "Generating Analysis Visualizations"
@@ -35,8 +35,8 @@ echo "=========================================="
 echo "Visualization Generation Complete!"
 echo "=========================================="
 echo ""
-echo "Output directory: training_data/phase_algorithm_core/algorithm_analysis/plots/"
+echo "Output directory: training_data/phase_03_algorithm_core/algorithm_analysis/plots/"
 echo ""
 echo "Generated files:"
-ls -lh training_data/phase_algorithm_core/algorithm_analysis/plots/*.png 2>/dev/null || echo "  (Check for errors above)"
+ls -lh training_data/phase_03_algorithm_core/algorithm_analysis/plots/*.png 2>/dev/null || echo "  (Check for errors above)"
 echo ""

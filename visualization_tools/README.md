@@ -86,7 +86,7 @@ Force Profile - Continuous Disturbance (Normal Intensity)
 **Usage**:
 ```bash
 cd visualization_tools/plotting
-python plot_rl_results.py --metrics ../../training_data/phase_algorithm_core/dqn_algorithm_core/session_data/metrics/rl_metrics_dqn.json
+python plot_rl_results.py --metrics ../../training_data/phase_03_algorithm_core/dqn_algorithm_core/session_data/metrics/rl_metrics_dqn.json
 ```
 
 **Arguments**:
@@ -227,7 +227,7 @@ cd visualization_tools/plotting
 
 # 1. Plot all RL results
 python plot_rl_results.py \
-    --metrics ../../training_data/phase_algorithm_core/dqn_algorithm_core/session_data/metrics/rl_metrics_dqn.json \
+    --metrics ../../training_data/phase_03_algorithm_core/dqn_algorithm_core/session_data/metrics/rl_metrics_dqn.json \
     --output ../outputs/plots/ \
     --format pdf
 
@@ -241,8 +241,8 @@ done
 
 # 3. Compare algorithms
 python plot_rl_results.py \
-    --metrics ../../training_data/phase_algorithm_core/dqn_algorithm_core/session_data/metrics/rl_metrics_dqn.json \
-    --compare ../../training_data/phase_algorithm_core/qlearning_algorithm_core/session_data/metrics/rl_metrics_q-learning.json \
+    --metrics ../../training_data/phase_03_algorithm_core/dqn_algorithm_core/session_data/metrics/rl_metrics_dqn.json \
+    --compare ../../training_data/phase_03_algorithm_core/qlearning_algorithm_core/session_data/metrics/rl_metrics_q-learning.json \
     --output ../outputs/plots/algorithm_comparison.png
 ```
 
@@ -260,7 +260,7 @@ python visualize_trajectories.py --trajectory circular --radius 0.3
 # 3. Compare planned vs actual trajectory
 python visualize_trajectories.py \
     --trajectory circular \
-    --actual ../../training_data/phase_algorithm_core/dqn_algorithm_core/session_data/trajectories/episode_1000.json
+    --actual ../../training_data/phase_03_algorithm_core/dqn_algorithm_core/session_data/trajectories/episode_1000.json
 ```
 
 ### Batch Processing
@@ -269,7 +269,7 @@ python visualize_trajectories.py \
 # Generate all plots for a training session
 cd visualization_tools/plotting
 
-SESSION_DIR="../../training_data/phase_algorithm_core/dqn_algorithm_core/session_data"
+SESSION_DIR="../../training_data/phase_03_algorithm_core/dqn_algorithm_core/session_data"
 
 # Plot all metrics
 python plot_rl_results.py \
@@ -425,7 +425,7 @@ cd visualization_tools/plotting
 
 # Generate all analysis plots
 python plot_rl_results.py \
-    --metrics ../../training_data/phase_algorithm_core/dqn_algorithm_core/session_data/metrics/rl_metrics_dqn.json \
+    --metrics ../../training_data/phase_03_algorithm_core/dqn_algorithm_core/session_data/metrics/rl_metrics_dqn.json \
     --output ../outputs/plots/ \
     --format png pdf svg
 ```
